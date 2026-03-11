@@ -10,14 +10,18 @@
     <div class="auth-container">
         <h2>Создание учетной записи</h2>
         
-        {{if .error}}
+        {{if .Error}}
             <div class="error-message">
-                {{if eq .error "empty"}}
+                {{if eq .Error "empty"}}
                     Все поля должны быть заполнены
-                {{else if eq .error "password_mismatch"}}
+                {{else if eq .Error "password_mismatch"}}
                     Пароли не совпадают
-                {{else if eq .error "user_exists"}}
+                {{else if eq .Error "user_exists"}}
                     Пользователь с таким именем уже существует
+                {{else if eq .Error "username_length"}}
+                    Логин должен быть от 3 до 20 символов
+                {{else if eq .Error "password_length"}}
+                    Пароль должен быть не менее 4 символов
                 {{end}}
             </div>
         {{end}}
@@ -25,12 +29,14 @@
         <form action="/register-handler" method="POST" class="auth-form">
             <div class="form-group">
                 <label for="username">Логин:</label>
-                <input type="text" id="username" name="username" required>
+                <input type="text" id="username" name="username" required autofocus>
+                <small>От 3 до 20 символов</small>
             </div>
             
             <div class="form-group">
                 <label for="password">Пароль:</label>
                 <input type="password" id="password" name="password" required>
+                <small>Не менее 4 символов</small>
             </div>
             
             <div class="form-group">

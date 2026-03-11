@@ -1,10 +1,9 @@
 package main
 
 import (
-	"encoding/json"
 	"html/template"
+	"math/rand"
 	"net/http"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -17,9 +16,9 @@ type User struct {
 }
 
 type Message struct {
-	Username  string
-	Text      string
-	Timestamp time.Time
+	Username  string    `json:"username"`
+	Text      string    `json:"text"`
+	Timestamp time.Time `json:"timestamp"`
 }
 
 type Session struct {
@@ -40,27 +39,29 @@ var (
 func InitUserStore() {
 	// Добавим тестового пользователя для удобства
 	users["test"] = User{Username: "test", Password: "test"}
+	users["admin"] = User{Username: "admin", Password: "admin"}
 }
 
 func InitMessageStore() {
 	// Несколько тестовых сообщений
 	messages = append(messages, Message{
 		Username:  "test",
-		Text:      "Добро пожаловать в чат!",
+		Text:      "Добро пожаловать в чат с WebSocket!",
 		Timestamp: time.Now(),
+	})
+	messages = append(messages, Message{
+		Username:  "admin",
+		Text:      "Теперь сообщения приходят мгновенно!",
+		Timestamp: time.Now().Add(-time.Minute),
 	})
 }
 
 // Вспомогательные функции
 func generateSessionID() string {
-	return time.Now().Format("20060102150405") + randomString(5)
-}
-
-func randomString(n int) string {
-	letters := []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
-	b := make([]rune, n)
+	const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	b := make([]byte, 16)
 	for i := range b {
-		b[i] = letters[time.Now().UnixNano()%int64(len(letters))]
+		b[i] = letters[rand.Intn(len(letters))]
 	}
 	return string(b)
 }
@@ -83,13 +84,47 @@ func getSessionUser(r *http.Request) string {
 
 // Обработчики страниц
 func LoginPage(w http.ResponseWriter, r *http.Request) {
+	// Если пользователь уже залогинен, перенаправляем в чат
+	if username := getSessionUser(r); username != "" {
+		http.Redirect(w, r, "/chat", http.StatusSeeOther)
+		return
+	}
+
+	// Получаем параметр ошибки из URL
+	errorMsg := r.URL.Query().Get("error")
+
 	tmpl := template.Must(template.ParseFiles("templates/login.html"))
-	tmpl.Execute(w, nil)
+
+	// Передаем данные в шаблон
+	data := struct {
+		Error string
+	}{
+		Error: errorMsg,
+	}
+
+	tmpl.Execute(w, data)
 }
 
 func RegisterPage(w http.ResponseWriter, r *http.Request) {
+	// Если пользователь уже залогинен, перенаправляем в чат
+	if username := getSessionUser(r); username != "" {
+		http.Redirect(w, r, "/chat", http.StatusSeeOther)
+		return
+	}
+
+	// Получаем параметр ошибки из URL
+	errorMsg := r.URL.Query().Get("error")
+
 	tmpl := template.Must(template.ParseFiles("templates/register.html"))
-	tmpl.Execute(w, nil)
+
+	// Передаем данные в шаблон
+	data := struct {
+		Error string
+	}{
+		Error: errorMsg,
+	}
+
+	tmpl.Execute(w, data)
 }
 
 func ChatPage(w http.ResponseWriter, r *http.Request) {
@@ -110,8 +145,13 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	username := r.FormValue("username")
+	username := strings.TrimSpace(r.FormValue("username"))
 	password := r.FormValue("password")
+
+	if username == "" || password == "" {
+		http.Redirect(w, r, "/?error=empty", http.StatusSeeOther)
+		return
+	}
 
 	usersMu.RLock()
 	user, exists := users[username]
@@ -154,6 +194,16 @@ func RegisterHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if len(username) < 3 || len(username) > 20 {
+		http.Redirect(w, r, "/register?error=username_length", http.StatusSeeOther)
+		return
+	}
+
+	if len(password) < 4 {
+		http.Redirect(w, r, "/register?error=password_length", http.StatusSeeOther)
+		return
+	}
+
 	if password != confirmPassword {
 		http.Redirect(w, r, "/register?error=password_mismatch", http.StatusSeeOther)
 		return
@@ -186,53 +236,42 @@ func RegisterHandler(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/chat", http.StatusSeeOther)
 }
 
-func SendMessageHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
+// Добавьте эту функцию в файл handlers.go
+
+// LogoutHandler - обработчик выхода из системы
+func LogoutHandler(w http.ResponseWriter, r *http.Request) {
+	// Получаем сессию из cookie
+	cookie, err := r.Cookie("session_id")
+	if err == nil {
+		// Удаляем сессию из хранилища
+		sessionsMu.Lock()
+		delete(sessions, cookie.Value)
+		sessionsMu.Unlock()
 	}
 
-	username := getSessionUser(r)
-	if username == "" {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
-	}
-
-	text := strings.TrimSpace(r.FormValue("message"))
-	if text == "" {
-		http.Error(w, "Empty message", http.StatusBadRequest)
-		return
-	}
-
-	messagesMu.Lock()
-	messages = append(messages, Message{
-		Username:  username,
-		Text:      text,
-		Timestamp: time.Now(),
+	// Удаляем cookie на стороне клиента
+	http.SetCookie(w, &http.Cookie{
+		Name:     "session_id",
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		MaxAge:   -1,              // Мгновенное истечение
+		Expires:  time.Unix(0, 0), // Устанавливаем дату в прошлом
 	})
-	messagesMu.Unlock()
 
-	w.WriteHeader(http.StatusOK)
+	// Перенаправляем на страницу входа
+	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
-func GetMessagesHandler(w http.ResponseWriter, r *http.Request) {
-	username := getSessionUser(r)
-	if username == "" {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
+// AuthMiddleware - проверяет авторизацию пользователя
+func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		username := getSessionUser(r)
+		if username == "" {
+			// Если пользователь не авторизован, перенаправляем на страницу входа
+			http.Redirect(w, r, "/", http.StatusSeeOther)
+			return
+		}
+		next(w, r)
 	}
-
-	messagesMu.RLock()
-	// Создаем копию для отправки
-	messagesCopy := make([]Message, len(messages))
-	copy(messagesCopy, messages)
-	messagesMu.RUnlock()
-
-	// Сортируем по времени (от старых к новым)
-	sort.Slice(messagesCopy, func(i, j int) bool {
-		return messagesCopy[i].Timestamp.Before(messagesCopy[j].Timestamp)
-	})
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(messagesCopy)
 }

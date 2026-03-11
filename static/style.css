@@ -51,11 +51,18 @@ body {
     border: 1px solid #ddd;
     border-radius: 5px;
     font-size: 1rem;
+    transition: border-color 0.3s;
 }
 
 .form-group input:focus {
     outline: none;
     border-color: #667eea;
+    box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.1);
+}
+
+.form-group small {
+    color: #666;
+    font-size: 0.8rem;
 }
 
 .btn-primary {
@@ -74,6 +81,11 @@ body {
     background: #5a67d8;
 }
 
+.btn-primary:disabled {
+    background: #ccc;
+    cursor: not-allowed;
+}
+
 .auth-link {
     text-align: center;
     margin-top: 1rem;
@@ -83,6 +95,7 @@ body {
 .auth-link a {
     color: #667eea;
     text-decoration: none;
+    font-weight: 500;
 }
 
 .auth-link a:hover {
@@ -96,6 +109,21 @@ body {
     border-radius: 5px;
     margin-bottom: 1rem;
     text-align: center;
+    border-left: 3px solid #c33;
+}
+
+.demo-credentials {
+    margin-top: 2rem;
+    padding: 1rem;
+    background: #f8f9fa;
+    border-radius: 5px;
+    text-align: center;
+    font-size: 0.9rem;
+    color: #666;
+}
+
+.demo-credentials p {
+    margin: 0.25rem 0;
 }
 
 /* Стили для чата */
@@ -116,6 +144,8 @@ body {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    background: #f8f9fa;
+    border-radius: 10px 10px 0 0;
 }
 
 .chat-header h3 {
@@ -125,6 +155,9 @@ body {
 .user-info {
     color: #666;
     font-size: 0.9rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
 }
 
 .logout-link {
@@ -137,6 +170,11 @@ body {
     text-decoration: underline;
 }
 
+.connection-status {
+    font-size: 0.8rem;
+    transition: color 0.3s;
+}
+
 .messages-container {
     flex: 1;
     overflow-y: auto;
@@ -144,6 +182,7 @@ body {
     display: flex;
     flex-direction: column;
     gap: 1rem;
+    background: #fff;
 }
 
 .message {
@@ -151,6 +190,16 @@ body {
     padding: 0.75rem;
     border-radius: 8px;
     border-left: 3px solid #667eea;
+    animation: messageAppear 0.3s ease-out;
+}
+
+.message.own-message {
+    background: #e3f2fd;
+    border-left: 3px solid #2196f3;
+}
+
+.message.own-message .message-username {
+    color: #1976d2;
 }
 
 .message-header {
@@ -179,6 +228,8 @@ body {
     border-top: 1px solid #eee;
     display: flex;
     gap: 0.5rem;
+    background: #f8f9fa;
+    border-radius: 0 0 10px 10px;
 }
 
 .message-input {
@@ -187,11 +238,17 @@ body {
     border: 1px solid #ddd;
     border-radius: 5px;
     font-size: 1rem;
+    transition: border-color 0.3s;
 }
 
 .message-input:focus {
     outline: none;
     border-color: #667eea;
+}
+
+.message-input:disabled {
+    background: #f5f5f5;
+    cursor: not-allowed;
 }
 
 .send-button {
@@ -205,20 +262,70 @@ body {
     transition: background 0.3s;
 }
 
-.send-button:hover {
+.send-button:hover:not(:disabled) {
     background: #5a67d8;
 }
 
-/* Адаптивность */
-@media (max-width: 768px) {
-    .chat-container {
-        height: 100vh;
-        border-radius: 0;
+.send-button:disabled {
+    background: #ccc;
+    cursor: not-allowed;
+}
+
+/* Анимации */
+@keyframes messageAppear {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
     }
-    
-    .auth-container {
-        margin: 1rem;
+    to {
+        opacity: 1;
+        transform: translateY(0);
     }
+}
+
+/* Индикатор набора текста */
+.typing-indicator {
+    display: flex;
+    gap: 0.3rem;
+    padding: 0.5rem;
+    background: #f0f0f0;
+    border-radius: 10px;
+    width: fit-content;
+    margin-top: 0.5rem;
+}
+
+.typing-indicator span {
+    width: 8px;
+    height: 8px;
+    background: #999;
+    border-radius: 50%;
+    animation: typing 1s infinite ease-in-out;
+}
+
+.typing-indicator span:nth-child(2) {
+    animation-delay: 0.2s;
+}
+
+.typing-indicator span:nth-child(3) {
+    animation-delay: 0.4s;
+}
+
+@keyframes typing {
+    0%, 100% {
+        transform: translateY(0);
+    }
+    50% {
+        transform: translateY(-5px);
+    }
+}
+
+/* Системные сообщения */
+.system-message {
+    text-align: center;
+    color: #999;
+    font-size: 0.9rem;
+    padding: 0.5rem;
+    font-style: italic;
 }
 
 /* Стили для скроллбара */
@@ -237,4 +344,78 @@ body {
 
 .messages-container::-webkit-scrollbar-thumb:hover {
     background: #5a67d8;
+}
+
+/* Адаптивность */
+@media (max-width: 768px) {
+    .chat-container {
+        height: 100vh;
+        border-radius: 0;
+    }
+    
+    .auth-container {
+        margin: 1rem;
+    }
+    
+    .chat-header {
+        flex-direction: column;
+        gap: 0.5rem;
+        text-align: center;
+    }
+    
+    .user-info {
+        flex-direction: column;
+        align-items: center;
+        gap: 0.3rem;
+    }
+    
+    .message-form {
+        flex-direction: column;
+    }
+    
+    .send-button {
+        width: 100%;
+    }
+}
+
+.logout-button {
+    background: #f44336;
+    color: white;
+    border: none;
+    padding: 0.4rem 1rem;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 0.9rem;
+    margin-left: 0.5rem;
+    transition: background 0.3s;
+}
+
+.logout-button:hover {
+    background: #d32f2f;
+}
+
+.logout-button:active {
+    transform: scale(0.98);
+}
+
+/* Обновляем существующие стили для user-info */
+.user-info {
+    color: #666;
+    font-size: 0.9rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+@media (max-width: 768px) {
+    .user-info {
+        justify-content: center;
+    }
+    
+    .logout-button {
+        margin-left: 0;
+        width: 100%;
+    }
 }

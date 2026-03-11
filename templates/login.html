@@ -10,9 +10,11 @@
     <div class="auth-container">
         <h2>Вход в чат</h2>
         
-        {{if .error}}
+        {{if .Error}}
             <div class="error-message">
-                {{if eq .error "invalid"}}
+                {{if eq .Error "empty"}}
+                    Пожалуйста, заполните все поля
+                {{else if eq .Error "invalid"}}
                     Неверное имя пользователя или пароль
                 {{end}}
             </div>
@@ -21,7 +23,7 @@
         <form action="/login" method="POST" class="auth-form">
             <div class="form-group">
                 <label for="username">Логин:</label>
-                <input type="text" id="username" name="username" required>
+                <input type="text" id="username" name="username" required autofocus>
             </div>
             
             <div class="form-group">
@@ -35,6 +37,12 @@
         <p class="auth-link">
             Нет аккаунта? <a href="/register">Создать учетную запись</a>
         </p>
+        
+        <div class="demo-credentials">
+            <p>Тестовые данные:</p>
+            <p>Логин: test, Пароль: test</p>
+            <p>Логин: admin, Пароль: admin</p>
+        </div>
     </div>
 </body>
 </html>

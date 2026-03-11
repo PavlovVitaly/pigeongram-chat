@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Групповой чат</title>
+    <title>Групповой чат (WebSocket)</title>
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -11,55 +11,121 @@
         <div class="chat-header">
             <h3>Групповой чат</h3>
             <div class="user-info">
-                Вы вошли как: <strong>{{.}}</strong>
-                <a href="/" class="logout-link">(выйти)</a>
+                Вы вошли как: <strong id="current-user">{{.}}</strong>
+                <span class="connection-status" id="connection-status">(подключение...)</span>
+                <button id="logout-button" class="logout-button">Выйти</button>
             </div>
         </div>
         
         <div class="messages-container" id="messages">
-            <!-- Сообщения будут загружаться сюда -->
+            <!-- Сообщения будут добавляться сюда -->
         </div>
         
-        <form id="message-form" class="message-form">
+        <form id="message-form" class="message-form" onsubmit="sendMessage(event)">
             <input type="text" 
                    id="message-input" 
                    class="message-input" 
                    placeholder="Введите сообщение..." 
                    autocomplete="off" 
-                   required>
-            <button type="submit" class="send-button">Отправить</button>
+                   required
+                   disabled>
+            <button type="submit" class="send-button" id="send-button" disabled>Отправить</button>
         </form>
     </div>
 
     <script>
         const username = '{{.}}';
-        let lastMessageCount = 0;
+        let socket = null;
+        let reconnectAttempts = 0;
+        const maxReconnectAttempts = 5;
+        let isLoggingOut = false; // Флаг для отслеживания выхода
 
-        // Загрузка сообщений
-        async function loadMessages() {
-            try {
-                const response = await fetch('/get-messages');
-                const messages = await response.json();
+        // Функция для создания WebSocket соединения
+        function connectWebSocket() {
+            // Не подключаемся, если происходит выход
+            if (isLoggingOut) {
+                return;
+            }
+            
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/ws`;
+            
+            socket = new WebSocket(wsUrl);
+            
+            socket.onopen = function(e) {
+                console.log('WebSocket соединение установлено');
+                document.getElementById('connection-status').textContent = '(онлайн)';
+                document.getElementById('connection-status').style.color = '#4caf50';
+                document.getElementById('message-input').disabled = false;
+                document.getElementById('send-button').disabled = false;
+                reconnectAttempts = 0;
+            };
+            
+            socket.onmessage = function(event) {
+                const message = JSON.parse(event.data);
+                addMessage(message);
+            };
+            
+            socket.onclose = function(event) {
+                console.log('WebSocket соединение закрыто');
+                document.getElementById('connection-status').textContent = '(офлайн)';
+                document.getElementById('connection-status').style.color = '#f44336';
+                document.getElementById('message-input').disabled = true;
+                document.getElementById('send-button').disabled = true;
                 
-                const messagesContainer = document.getElementById('messages');
+                // Пытаемся переподключиться, только если это не запланированный выход
+                if (!isLoggingOut && reconnectAttempts < maxReconnectAttempts) {
+                    reconnectAttempts++;
+                    console.log(`Попытка переподключения ${reconnectAttempts}...`);
+                    setTimeout(connectWebSocket, 3000);
+                }
+            };
+            
+            socket.onerror = function(error) {
+                console.error('Ошибка WebSocket:', error);
+            };
+        }
+
+        // Функция для выхода из системы
+        async function logout() {
+            if (confirm('Вы действительно хотите выйти?')) {
+                isLoggingOut = true;
                 
-                if (messages.length > lastMessageCount) {
-                    // Очищаем контейнер и перестраиваем все сообщения
-                    messagesContainer.innerHTML = '';
-                    
-                    messages.forEach(msg => {
-                        const messageElement = createMessageElement(msg);
-                        messagesContainer.appendChild(messageElement);
+                // Закрываем WebSocket соединение
+                if (socket) {
+                    socket.close();
+                }
+                
+                try {
+                    // Отправляем запрос на выход
+                    const response = await fetch('/logout', {
+                        method: 'GET',
+                        credentials: 'same-origin'
                     });
                     
-                    lastMessageCount = messages.length;
-                    
-                    // Прокрутка вниз
-                    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+                    if (response.redirected) {
+                        // Перенаправляем на страницу входа
+                        window.location.href = response.url;
+                    } else {
+                        // Если нет редиректа, перенаправляем вручную
+                        window.location.href = '/';
+                    }
+                } catch (error) {
+                    console.error('Ошибка при выходе:', error);
+                    // В случае ошибки все равно перенаправляем на главную
+                    window.location.href = '/';
                 }
-            } catch (error) {
-                console.error('Ошибка загрузки сообщений:', error);
             }
+        }
+
+        // Функция для добавления сообщения в чат
+        function addMessage(message) {
+            const messagesContainer = document.getElementById('messages');
+            const messageElement = createMessageElement(message);
+            messagesContainer.appendChild(messageElement);
+            
+            // Прокрутка вниз
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
         }
 
         // Создание элемента сообщения
@@ -67,7 +133,12 @@
             const div = document.createElement('div');
             div.className = 'message';
             
-            const time = new Date(message.Timestamp);
+            // Добавляем класс для своих сообщений
+            if (message.username === username) {
+                div.classList.add('own-message');
+            }
+            
+            const time = new Date(message.timestamp);
             const timeStr = time.toLocaleTimeString('ru-RU', { 
                 hour: '2-digit', 
                 minute: '2-digit',
@@ -76,10 +147,10 @@
             
             div.innerHTML = `
                 <div class="message-header">
-                    <span class="message-username">${message.Username}</span>
+                    <span class="message-username">${escapeHtml(message.username)}</span>
                     <span class="message-time">${timeStr}</span>
                 </div>
-                <div class="message-text">${escapeHtml(message.Text)}</div>
+                <div class="message-text">${escapeHtml(message.text)}</div>
             `;
             
             return div;
@@ -96,35 +167,44 @@
         }
 
         // Отправка сообщения
-        document.getElementById('message-form').addEventListener('submit', async (e) => {
-            e.preventDefault();
+        function sendMessage(event) {
+            event.preventDefault();
             
             const input = document.getElementById('message-input');
             const message = input.value.trim();
             
-            if (message) {
-                try {
-                    const response = await fetch('/send-message', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/x-www-form-urlencoded',
-                        },
-                        body: `message=${encodeURIComponent(message)}`
-                    });
-                    
-                    if (response.ok) {
-                        input.value = '';
-                        await loadMessages();
-                    }
-                } catch (error) {
-                    console.error('Ошибка отправки сообщения:', error);
-                }
+            if (message && socket && socket.readyState === WebSocket.OPEN) {
+                // Отправляем через WebSocket
+                socket.send(JSON.stringify({
+                    text: message
+                }));
+                
+                input.value = '';
+            }
+        }
+
+        // Подключаемся при загрузке страницы
+        window.onload = function() {
+            connectWebSocket();
+            
+            // Добавляем обработчик для кнопки выхода
+            document.getElementById('logout-button').addEventListener('click', logout);
+        };
+
+        // Обработка нажатия Enter
+        document.getElementById('message-input').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage(e);
             }
         });
 
-        // Загрузка сообщений каждые 2 секунды
-        loadMessages();
-        setInterval(loadMessages, 2000);
+        // Защита от случайного закрытия страницы
+        window.onbeforeunload = function() {
+            if (socket && socket.readyState === WebSocket.OPEN && !isLoggingOut) {
+                socket.close();
+            }
+        };
     </script>
 </body>
 </html>
