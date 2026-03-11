@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Групповой чат</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="chat-container">
+        <div class="chat-header">
+            <h3>Групповой чат</h3>
+            <div class="user-info">
+                Вы вошли как: <strong>{{.}}</strong>
+                <a href="/" class="logout-link">(выйти)</a>
+            </div>
+        </div>
+        
+        <div class="messages-container" id="messages">
+            <!-- Сообщения будут загружаться сюда -->
+        </div>
+        
+        <form id="message-form" class="message-form">
+            <input type="text" 
+                   id="message-input" 
+                   class="message-input" 
+                   placeholder="Введите сообщение..." 
+                   autocomplete="off" 
+                   required>
+            <button type="submit" class="send-button">Отправить</button>
+        </form>
+    </div>
+
+    <script>
+        const username = '{{.}}';
+        let lastMessageCount = 0;
+
+        // Загрузка сообщений
+        async function loadMessages() {
+            try {
+                const response = await fetch('/get-messages');
+                const messages = await response.json();
+                
+                const messagesContainer = document.getElementById('messages');
+                
+                if (messages.length > lastMessageCount) {
+                    // Очищаем контейнер и перестраиваем все сообщения
+                    messagesContainer.innerHTML = '';
+                    
+                    messages.forEach(msg => {
+                        const messageElement = createMessageElement(msg);
+                        messagesContainer.appendChild(messageElement);
+                    });
+                    
+                    lastMessageCount = messages.length;
+                    
+                    // Прокрутка вниз
+                    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+                }
+            } catch (error) {
+                console.error('Ошибка загрузки сообщений:', error);
+            }
+        }
+
+        // Создание элемента сообщения
+        function createMessageElement(message) {
+            const div = document.createElement('div');
+            div.className = 'message';
+            
+            const time = new Date(message.Timestamp);
+            const timeStr = time.toLocaleTimeString('ru-RU', { 
+                hour: '2-digit', 
+                minute: '2-digit',
+                second: '2-digit'
+            });
+            
+            div.innerHTML = `
+                <div class="message-header">
+                    <span class="message-username">${message.Username}</span>
+                    <span class="message-time">${timeStr}</span>
+                </div>
+                <div class="message-text">${escapeHtml(message.Text)}</div>
+            `;
+            
+            return div;
+        }
+
+        // Экранирование HTML
+        function escapeHtml(unsafe) {
+            return unsafe
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        }
+
+        // Отправка сообщения
+        document.getElementById('message-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const input = document.getElementById('message-input');
+            const message = input.value.trim();
+            
+            if (message) {
+                try {
+                    const response = await fetch('/send-message', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/x-www-form-urlencoded',
+                        },
+                        body: `message=${encodeURIComponent(message)}`
+                    });
+                    
+                    if (response.ok) {
+                        input.value = '';
+                        await loadMessages();
+                    }
+                } catch (error) {
+                    console.error('Ошибка отправки сообщения:', error);
+                }
+            }
+        });
+
+        // Загрузка сообщений каждые 2 секунды
+        loadMessages();
+        setInterval(loadMessages, 2000);
+    </script>
+</body>
+</html>
