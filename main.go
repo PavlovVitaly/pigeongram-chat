@@ -4,6 +4,7 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
+	"pigeongram/web"
 	"time"
 )
 
@@ -12,19 +13,20 @@ func main() {
 	rand.Seed(time.Now().UnixNano())
 
 	// Инициализация хранилищ
-	InitUserStore()
-	InitMessageStore()
-	InitWebSocket()
+	web.InitUserStore()
+	web.InitMessageStore()
+	web.InitWebSocket()
 
 	// Настройка маршрутов
-	http.HandleFunc("/", LoginPage)
-	http.HandleFunc("/login", LoginHandler)
-	http.HandleFunc("/register", RegisterPage)
-	http.HandleFunc("/register-handler", RegisterHandler)
-	http.HandleFunc("/chat", AuthMiddleware(ChatPage))
-	http.HandleFunc("/logout", LogoutHandler) // Новый маршрут для выхода
-	http.HandleFunc("/ws", AuthMiddleware(WebSocketHandler))
-	http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
+	http.HandleFunc("/", web.LoginPage)
+	http.HandleFunc("/login", web.LoginHandler)
+	http.HandleFunc("/register", web.RegisterPage)
+	http.HandleFunc("/register-handler", web.RegisterHandler)
+	http.HandleFunc("/chat", web.AuthMiddleware(web.ChatPage))
+	http.HandleFunc("/logout", web.LogoutHandler) // Новый маршрут для выхода
+	http.HandleFunc("/ws", web.AuthMiddleware(web.WebSocketHandler))
+	fs := http.FileServer(http.Dir("web/static"))
+	http.Handle("/static/", http.StripPrefix("/static/", fs))
 
 	log.Println("Сервер запущен на http://localhost:8080")
 	log.Println("Тестовые учетные записи: test/test, admin/admin")
