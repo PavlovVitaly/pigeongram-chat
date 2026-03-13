@@ -7,103 +7,44 @@ import (
 	"math/rand"
 	"net/http"
 	"strings"
-	"sync"
-	"time"
 
-	"pigeongram/models"
+	"pigeongram/pkg/models" // DTO
+	// сущности БД
+	"pigeongram/repository/cache"
 	"pigeongram/repository/postgres"
 )
 
-// Структуры данных
-type User struct {
-	Username string
-	Password string
-}
-
-type Message struct {
-	Username  string    `json:"username"`
-	Text      string    `json:"text"`
-	Timestamp time.Time `json:"timestamp"`
-}
-
-type Session struct {
-	Username string
-}
-
 // Хранилища
 var (
-	userRepo    *postgres.UserRepository
-	msgRepo     *postgres.MessageRepository
-	sessionRepo *postgres.SessionRepository
-
-	// Пока оставляем старые in-memory хранилища для совместимости
-	users      = make(map[string]User)
-	messages   = make([]Message, 0)
-	sessions   = make(map[string]Session)
-	usersMu    sync.RWMutex
-	messagesMu sync.RWMutex
-	sessionsMu sync.RWMutex
+	userRepo     *postgres.UserRepository
+	msgRepo      *postgres.MessageRepository
+	sessionRepo  *postgres.SessionRepository
+	messageCache cache.Cache
 )
 
-// InitStores инициализирует репозитории БД
-func InitStores(ur *postgres.UserRepository, mr *postgres.MessageRepository, sr *postgres.SessionRepository) {
+// InitStores инициализирует репозитории и кэш
+func InitStores(ur *postgres.UserRepository, mr *postgres.MessageRepository, sr *postgres.SessionRepository, mc cache.Cache) {
 	userRepo = ur
 	msgRepo = mr
 	sessionRepo = sr
-	log.Println("📦 Репозитории PostgreSQL инициализированы")
+	messageCache = mc
+	log.Println("📦 Репозитории и кэш инициализированы")
 }
 
-// Инициализация хранилищ
-func InitUserStore() {
-	// Добавим тестового пользователя для удобства
-	users["test"] = User{Username: "test", Password: "test"}
-	users["admin"] = User{Username: "admin", Password: "admin"}
-}
-
-func InitMessageStore() {
-	// Несколько тестовых сообщений
-	messages = append(messages, Message{
-		Username:  "test",
-		Text:      "Добро пожаловать в чат с WebSocket!",
-		Timestamp: time.Now(),
-	})
-	messages = append(messages, Message{
-		Username:  "admin",
-		Text:      "Теперь сообщения приходят мгновенно!",
-		Timestamp: time.Now().Add(-time.Minute),
-	})
-}
-
-// Вспомогательные функции
+// generateSessionID генерирует ID сессии
 func generateSessionID() string {
 	const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	b := make([]byte, 16)
+	b := make([]byte, 32)
 	for i := range b {
 		b[i] = letters[rand.Intn(len(letters))]
 	}
 	return string(b)
 }
 
-func getSessionUser(r *http.Request) string {
-	cookie, err := r.Cookie("session_id")
-	if err != nil {
-		return ""
-	}
-
-	sessionsMu.RLock()
-	session, exists := sessions[cookie.Value]
-	sessionsMu.RUnlock()
-
-	if !exists {
-		return ""
-	}
-	return session.Username
-}
-
-// Обработчики страниц
+// LoginPage - страница входа
 func LoginPage(w http.ResponseWriter, r *http.Request) {
 	// Если пользователь уже залогинен, перенаправляем в чат
-	if username := getSessionUser(r); username != "" {
+	if getUserFromSession(r) != "" {
 		http.Redirect(w, r, "/chat", http.StatusSeeOther)
 		return
 	}
@@ -125,7 +66,7 @@ func LoginPage(w http.ResponseWriter, r *http.Request) {
 
 func RegisterPage(w http.ResponseWriter, r *http.Request) {
 	// Если пользователь уже залогинен, перенаправляем в чат
-	if username := getSessionUser(r); username != "" {
+	if getUserFromSession(r) != "" {
 		http.Redirect(w, r, "/chat", http.StatusSeeOther)
 		return
 	}
@@ -145,8 +86,9 @@ func RegisterPage(w http.ResponseWriter, r *http.Request) {
 	tmpl.Execute(w, data)
 }
 
+// ChatPage - страница чата
 func ChatPage(w http.ResponseWriter, r *http.Request) {
-	username := getSessionUser(r)
+	username := getUserFromSession(r)
 	if username == "" {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return
@@ -156,7 +98,7 @@ func ChatPage(w http.ResponseWriter, r *http.Request) {
 	tmpl.Execute(w, username)
 }
 
-// Обработчики действий
+// LoginHandler - обрабатывает вход
 func LoginHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
@@ -171,48 +113,36 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ctx := context.Background()
+
 	// Проверяем в БД
-	var valid bool
-	var err error
-	if userRepo != nil {
-		ctx := context.Background()
-		valid, err = userRepo.Validate(ctx, username, password)
-		if err != nil {
-			log.Printf("❌ Ошибка проверки пользователя: %v", err)
-		}
-	}
-
-	// Если не нашли в БД, проверяем в памяти
-	if !valid {
-		usersMu.RLock()
-		user, exists := users[username]
-		usersMu.RUnlock()
-		valid = exists && user.Password == password
-	}
-
-	if !valid {
+	user, err := userRepo.GetByUsername(ctx, username)
+	if err != nil || user == nil || user.Password != password {
 		http.Redirect(w, r, "/?error=invalid", http.StatusSeeOther)
 		return
 	}
 
-	sessionID := generateSessionID()
-
-	// Сохраняем сессию в БД
-	if userRepo != nil && sessionRepo != nil {
-		ctx := context.Background()
-		user, _ := userRepo.GetByUsername(ctx, username)
-		if user != nil {
-			err := sessionRepo.CreateUserSession(ctx, user.ID, sessionID)
-			if err != nil {
-				log.Printf("❌ Ошибка сохранения сессии в БД: %v", err)
-			}
-		}
+	// Сохраняем в кэш
+	if messageCache != nil {
+		webUser := &models.User{Username: user.Username, Password: user.Password}
+		messageCache.SetUser(ctx, username, webUser)
 	}
 
-	// Сохраняем сессию в памяти (для совместимости)
-	sessionsMu.Lock()
-	sessions[sessionID] = Session{username}
-	sessionsMu.Unlock()
+	sessionID := generateSessionID()
+
+	// Создаем сессию в БД
+	err = sessionRepo.CreateUserSession(ctx, user.ID, sessionID)
+	if err != nil {
+		log.Printf("❌ Ошибка создания сессии: %v", err)
+		http.Redirect(w, r, "/?error=server", http.StatusSeeOther)
+		return
+	}
+
+	// Сохраняем сессию в кэш
+	if messageCache != nil {
+		webSession := &models.Session{Username: username}
+		messageCache.SetSession(ctx, sessionID, webSession)
+	}
 
 	http.SetCookie(w, &http.Cookie{
 		Name:     "session_id",
@@ -226,6 +156,7 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/chat", http.StatusSeeOther)
 }
 
+// RegisterHandler - обрабатывает регистрацию
 func RegisterHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Redirect(w, r, "/register", http.StatusSeeOther)
@@ -234,11 +165,10 @@ func RegisterHandler(w http.ResponseWriter, r *http.Request) {
 
 	username := strings.TrimSpace(r.FormValue("username"))
 	password := r.FormValue("password")
-	confirmPassword := r.FormValue("confirm_password")
+	confirm := r.FormValue("confirm_password")
 
-	// Валидация
-	if username == "" || password == "" {
-		http.Redirect(w, r, "/register?error=empty", http.StatusSeeOther)
+	if username == "" || password == "" || password != confirm {
+		http.Redirect(w, r, "/register?error=1", http.StatusSeeOther)
 		return
 	}
 
@@ -252,64 +182,50 @@ func RegisterHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if password != confirmPassword {
-		http.Redirect(w, r, "/register?error=password_mismatch", http.StatusSeeOther)
-		return
-	}
+	ctx := context.Background()
 
 	// Проверяем существование в БД
-	exists := false
-	if userRepo != nil {
-		ctx := context.Background()
-		user, _ := userRepo.GetByUsername(ctx, username)
-		exists = user != nil
-	}
-
-	// Проверяем в памяти
-	if !exists {
-		usersMu.RLock()
-		_, exists = users[username]
-		usersMu.RUnlock()
-	}
-
-	if exists {
+	existingUser, _ := userRepo.GetByUsername(ctx, username)
+	if existingUser != nil {
 		http.Redirect(w, r, "/register?error=exists", http.StatusSeeOther)
 		return
 	}
 
-	// Сохраняем в БД
-	if userRepo != nil {
-		ctx := context.Background()
-		newUser := &models.User{
-			Username: username,
-			Password: password, // TODO: добавить хеширование
-		}
-		err := userRepo.Create(ctx, newUser)
-		if err != nil {
-			log.Printf("❌ Ошибка сохранения пользователя в БД: %v", err)
-		}
+	// Создаем в БД
+	newUser := &models.User{
+		Username: username,
+		Password: password,
 	}
 
-	// Сохраняем в памяти
-	usersMu.Lock()
-	users[username] = User{username, password}
-	usersMu.Unlock()
+	err := userRepo.Create(ctx, newUser)
+	if err != nil {
+		log.Printf("❌ Ошибка создания пользователя: %v", err)
+		http.Redirect(w, r, "/register?error=server", http.StatusSeeOther)
+		return
+	}
+
+	// Получаем созданного пользователя с ID
+	createdUser, _ := userRepo.GetByUsername(ctx, username)
+
+	// Сохраняем в кэш
+	if messageCache != nil {
+		webUser := &models.User{Username: username, Password: password}
+		messageCache.SetUser(ctx, username, webUser)
+	}
 
 	sessionID := generateSessionID()
 
 	// Создаем сессию в БД
-	if userRepo != nil && sessionRepo != nil {
-		ctx := context.Background()
-		user, _ := userRepo.GetByUsername(ctx, username)
-		if user != nil {
-			sessionRepo.CreateUserSession(ctx, user.ID, sessionID)
-		}
+	err = sessionRepo.CreateUserSession(ctx, createdUser.ID, sessionID)
+	if err != nil {
+		log.Printf("❌ Ошибка создания сессии: %v", err)
 	}
 
-	// Сохраняем сессию в памяти
-	sessionsMu.Lock()
-	sessions[sessionID] = Session{username}
-	sessionsMu.Unlock()
+	// Сохраняем сессию в кэш
+	if messageCache != nil {
+		webSession := &models.Session{Username: username}
+		messageCache.SetSession(ctx, sessionID, webSession)
+	}
 
 	http.SetCookie(w, &http.Cookie{
 		Name:     "session_id",
@@ -323,35 +239,37 @@ func RegisterHandler(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/chat", http.StatusSeeOther)
 }
 
-// LogoutHandler - обработчик выхода из системы
+// LogoutHandler - обрабатывает выход
 func LogoutHandler(w http.ResponseWriter, r *http.Request) {
-	// Получаем сессию из cookie
 	cookie, err := r.Cookie("session_id")
 	if err == nil {
-		// Удаляем сессию из хранилища
-		sessionsMu.Lock()
-		delete(sessions, cookie.Value)
-		sessionsMu.Unlock()
+		ctx := context.Background()
+
+		// Удаляем из БД
+		sessionRepo.Delete(ctx, cookie.Value)
+
+		// Удаляем из кэша
+		if messageCache != nil {
+			messageCache.InvalidateSession(ctx, cookie.Value)
+		}
 	}
 
-	// Удаляем cookie на стороне клиента
 	http.SetCookie(w, &http.Cookie{
 		Name:     "session_id",
 		Value:    "",
 		Path:     "/",
 		HttpOnly: true,
-		MaxAge:   -1,              // Мгновенное истечение
-		Expires:  time.Unix(0, 0), // Устанавливаем дату в прошлом
+		MaxAge:   -1,
 	})
 
-	// Перенаправляем на страницу входа
+	log.Println("👋 Пользователь вышел из системы")
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
 // AuthMiddleware - проверяет авторизацию пользователя
 func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		username := getSessionUser(r)
+		username := getUserFromSession(r)
 		if username == "" {
 			// Если пользователь не авторизован, перенаправляем на страницу входа
 			http.Redirect(w, r, "/", http.StatusSeeOther)
@@ -361,28 +279,34 @@ func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// getUserFromSession получает пользователя из сессии
 func getUserFromSession(r *http.Request) string {
 	cookie, err := r.Cookie("session_id")
 	if err != nil {
 		return ""
 	}
 
-	// Сначала проверяем в БД
-	if sessionRepo != nil {
-		ctx := context.Background()
-		session, err := sessionRepo.GetByID(ctx, cookie.Value)
-		if err == nil && session != nil && !session.IsExpired() {
-			return session.User.Username
+	ctx := context.Background()
+
+	// Пробуем получить из кэша
+	if messageCache != nil {
+		cachedSession, err := messageCache.GetSession(ctx, cookie.Value)
+		if err == nil && cachedSession != nil {
+			return cachedSession.Username
 		}
 	}
 
-	// Fallback на старую систему
-	sessionsMu.RLock()
-	session, exists := sessions[cookie.Value]
-	sessionsMu.RUnlock()
-
-	if !exists {
+	// Если нет в кэше, грузим из БД
+	session, err := sessionRepo.GetByID(ctx, cookie.Value)
+	if err != nil || session == nil || session.IsExpired() {
 		return ""
 	}
-	return session.Username
+
+	// Сохраняем в кэш
+	if messageCache != nil {
+		webSession := &models.Session{Username: session.User.Username}
+		messageCache.SetSession(ctx, cookie.Value, webSession)
+	}
+
+	return session.User.Username
 }

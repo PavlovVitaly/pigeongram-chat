@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"pigeongram/config"
+	"pigeongram/repository/cache"
 	"pigeongram/repository/postgres"
 )
 
@@ -39,16 +40,19 @@ func main() {
 	}
 	log.Println("✅ PostgreSQL подключен успешно")
 
-	// 2. Создаем репозитории
+	// 2. Инициализация кэша (временная реализация в памяти)
+	log.Println("🚀 Инициализация кэша...")
+	messageCache := cache.NewMemoryCache(5 * time.Minute) // TTL 5 минут
+
+	// 3. Создаем репозитории
 	userRepo := postgres.NewUserRepository(db)
 	msgRepo := postgres.NewMessageRepository(db)
 	sessionRepo := postgres.NewSessionRepository(db)
 
-	// 3. Инициализируем хранилища в web пакете
-	// TODO: Пока оставляем и старую память, и новую БД для плавного перехода
-	web.InitStores(userRepo, msgRepo, sessionRepo)
+	// 4. Инициализируем хранилища в web пакете
+	web.InitStores(userRepo, msgRepo, sessionRepo, messageCache)
 
-	// 4. Запускаем периодическую очистку сессий
+	// 5. Запускаем периодическую очистку сессий
 	go func() {
 		ticker := time.NewTicker(1 * time.Hour)
 		for range ticker.C {
@@ -61,7 +65,7 @@ func main() {
 		}
 	}()
 
-	// 5. Запускаем WebSocket менеджер
+	// 6. Запускаем WebSocket менеджер
 	web.InitWebSocket()
 
 	// Настройка маршрутов
@@ -72,6 +76,8 @@ func main() {
 	http.HandleFunc("/chat", web.AuthMiddleware(web.ChatPage))
 	http.HandleFunc("/logout", web.LogoutHandler) // Новый маршрут для выхода
 	http.HandleFunc("/ws", web.AuthMiddleware(web.WebSocketHandler))
+
+	// Статические файлы
 	fs := http.FileServer(http.Dir("web/static"))
 	http.Handle("/static/", http.StripPrefix("/static/", fs))
 

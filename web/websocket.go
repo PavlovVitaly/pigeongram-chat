@@ -5,247 +5,271 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
-	"sync"
 	"time"
 
-	"pigeongram/models"
-
 	"github.com/gorilla/websocket"
+
+	"pigeongram/pkg/models" // DTO для клиента
 )
 
-// WebSocket upgrader
 var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool {
-		return true // Разрешаем все источники для разработки
-	},
+	CheckOrigin: func(r *http.Request) bool { return true },
 }
 
-// Client представляет подключенного клиента
 type Client struct {
-	Conn     *websocket.Conn
-	Username string
-	Send     chan interface{}
+	conn     *websocket.Conn
+	send     chan models.Message // отправляем DTO
+	username string
 }
 
-// WebSocket менеджер
-type WebSocketManager struct {
-	Clients    map[*Client]bool
-	Broadcast  chan Message
-	Register   chan *Client
-	Unregister chan *Client
-	Mutex      sync.RWMutex
+var (
+	clients    = make(map[*Client]bool)
+	broadcast  = make(chan models.Message) // канал для DTO
+	register   = make(chan *Client)
+	unregister = make(chan *Client)
+)
+
+func InitWebSocket() {
+	go run()
+	log.Println("🔌 WebSocket менеджер запущен")
 }
 
-var manager *WebSocketManager
+func run() {
+	for {
+		select {
+		case client := <-register:
+			clients[client] = true
+			log.Printf("🔌 Клиент %s подключился (всего: %d)", client.username, len(clients))
 
-// Добавляем функцию для сохранения сообщений в БД
-func saveMessageToDB(msg Message) {
+			// Отправляем историю
+			if err := sendMessageHistory(client); err != nil {
+				log.Printf("❌ Ошибка отправки истории: %v", err)
+			}
+
+		case client := <-unregister:
+			if _, ok := clients[client]; ok {
+				delete(clients, client)
+				close(client.send)
+				log.Printf("🔌 Клиент %s отключился (всего: %d)", client.username, len(clients))
+			}
+
+		case message := <-broadcast:
+			// Сохраняем в БД
+			go saveMessageToDB(message)
+
+			// Обновляем кэш - добавляем новое сообщение
+			if messageCache != nil {
+				ctx := context.Background()
+
+				// Получаем текущий кэш
+				cached, err := messageCache.GetRecentMessages(ctx)
+				if err == nil && cached != nil {
+					// Добавляем новое сообщение в конец (оно самое новое)
+					updatedMessages := append(cached, message)
+
+					// Оставляем только последние 100 сообщений
+					if len(updatedMessages) > 100 {
+						updatedMessages = updatedMessages[len(updatedMessages)-100:]
+					}
+
+					// Сохраняем обновленный кэш
+					messageCache.SetRecentMessages(ctx, updatedMessages)
+					log.Printf("📦 Кэш обновлен: добавлено сообщение от %s", message.Username)
+				} else {
+					// Если кэша нет, создаем новый с этим сообщением
+					messageCache.SetRecentMessages(ctx, []models.Message{message})
+				}
+			}
+
+			// Рассылаем всем
+			for client := range clients {
+				select {
+				case client.send <- message:
+				default:
+					close(client.send)
+					delete(clients, client)
+				}
+			}
+		}
+	}
+}
+
+// sendMessageHistory отправляет историю сообщений клиенту в правильном порядке
+func sendMessageHistory(client *Client) error {
+	ctx := context.Background()
+	var messages []models.Message // DTO для клиента
+
+	// Сначала пробуем получить из кэша
+	var cachedMessages []models.Message
+	if messageCache != nil {
+		cached, err := messageCache.GetRecentMessages(ctx)
+		if err == nil && cached != nil {
+			cachedMessages = cached
+			log.Printf("📦 Загружено %d сообщений из КЭША для %s", len(cachedMessages), client.username)
+
+			// Убеждаемся, что сообщения отсортированы правильно (старые сначала)
+			for i := 0; i < len(cachedMessages)-1; i++ {
+				for j := i + 1; j < len(cachedMessages); j++ {
+					if cachedMessages[i].Timestamp.After(cachedMessages[j].Timestamp) {
+						cachedMessages[i], cachedMessages[j] = cachedMessages[j], cachedMessages[i]
+					}
+				}
+			}
+			messages = cachedMessages
+		}
+	}
+
+	// Если в кэше нет или там меньше сообщений, грузим из БД
+	if (len(messages) == 0 || len(messages) < 100) && msgRepo != nil {
+		recent, err := msgRepo.GetRecent(ctx, 100)
+		if err == nil {
+			// Конвертируем Entity в DTO
+			dbMessages := make([]models.Message, 0, len(recent))
+			for _, msg := range recent {
+				dbMessages = append(dbMessages, models.Message{
+					Username:  msg.User.Username,
+					Text:      msg.Content,
+					Timestamp: msg.Timestamp,
+				})
+			}
+
+			// Сортируем сообщения по возрастанию времени (старые сначала)
+			for i := 0; i < len(dbMessages)-1; i++ {
+				for j := i + 1; j < len(dbMessages); j++ {
+					if dbMessages[i].Timestamp.After(dbMessages[j].Timestamp) {
+						dbMessages[i], dbMessages[j] = dbMessages[j], dbMessages[i]
+					}
+				}
+			}
+
+			// Если были сообщения из кэша, объединяем
+			if len(messages) > 0 {
+				// Создаем мапу для уникальности по тексту+времени (простой способ)
+				seen := make(map[string]bool)
+				for _, msg := range messages {
+					key := msg.Username + msg.Text + msg.Timestamp.String()
+					seen[key] = true
+				}
+
+				// Добавляем новые сообщения из БД
+				for _, msg := range dbMessages {
+					key := msg.Username + msg.Text + msg.Timestamp.String()
+					if !seen[key] {
+						messages = append(messages, msg)
+					}
+				}
+
+				// Пересортировываем
+				for i := 0; i < len(messages)-1; i++ {
+					for j := i + 1; j < len(messages); j++ {
+						if messages[i].Timestamp.After(messages[j].Timestamp) {
+							messages[i], messages[j] = messages[j], messages[i]
+						}
+					}
+				}
+			} else {
+				messages = dbMessages
+			}
+
+			log.Printf("📜 Загружено %d сообщений из БД для %s", len(dbMessages), client.username)
+
+			// Обновляем кэш (только если мы загрузили больше, чем было)
+			if messageCache != nil && len(messages) > len(cachedMessages) {
+				messageCache.SetRecentMessages(ctx, messages)
+				log.Printf("📦 Кэш обновлен из БД: теперь %d сообщений", len(messages))
+			}
+		}
+	}
+
+	// Отправляем клиенту
+	for _, msg := range messages {
+		client.send <- msg
+	}
+
+	return nil
+}
+
+// saveMessageToDB сохраняет сообщение в БД
+func saveMessageToDB(msg models.Message) {
 	if msgRepo == nil {
 		return
 	}
 
 	ctx := context.Background()
 
-	// Находим пользователя
-	user, err := userRepo.GetByUsername(ctx, msg.Username)
-	if err != nil || user == nil {
-		log.Printf("❌ Не удалось найти пользователя %s в БД", msg.Username)
-		return
-	}
-
-	// Создаем сообщение для БД
-	dbMsg := &models.Message{
-		UserID:    user.ID,
-		Content:   msg.Text,
-		Timestamp: msg.Timestamp,
-	}
-
-	// Сохраняем
-	err = msgRepo.Create(ctx, dbMsg)
+	// Сохраняем через репозиторий
+	err := msgRepo.Create(ctx, &msg)
 	if err != nil {
 		log.Printf("❌ Ошибка сохранения сообщения в БД: %v", err)
 	} else {
-		log.Printf("💾 Сообщение сохранено в БД")
+		log.Printf("💾 Сообщение от %s сохранено в БД", msg.Username)
 	}
 }
 
-// Инициализация WebSocket менеджера
-func InitWebSocket() {
-	manager = &WebSocketManager{
-		Clients:    make(map[*Client]bool),
-		Broadcast:  make(chan Message),
-		Register:   make(chan *Client),
-		Unregister: make(chan *Client),
-	}
-
-	go manager.Run()
-}
-
-// Запуск менеджера
-func (m *WebSocketManager) Run() {
-	for {
-		select {
-		case client := <-m.Register:
-			m.Clients[client] = true
-			log.Printf("🔌 Клиент %s подключился (всего: %d)", client.Username, len(m.Clients))
-
-			// Загружаем историю из БД
-			if msgRepo != nil {
-				ctx := context.Background()
-				recent, err := msgRepo.GetRecent(ctx, 100)
-				if err == nil {
-					for _, msg := range recent {
-						// Конвертируем из модели в старый формат
-						oldMsg := Message{
-							Username:  msg.User.Username,
-							Text:      msg.Content,
-							Timestamp: msg.Timestamp,
-						}
-						client.Send <- oldMsg
-					}
-					log.Printf("📜 Загружено %d сообщений из БД", len(recent))
-				}
-			} else {
-				// Fallback на старую систему
-				messagesMu.RLock()
-				for _, msg := range messages {
-					data, _ := json.Marshal(msg)
-					client.Send <- data
-				}
-				messagesMu.RUnlock()
-			}
-
-		case client := <-m.Unregister:
-			if _, ok := m.Clients[client]; ok {
-				delete(m.Clients, client)
-				close(client.Send)
-				log.Printf("🔌 Клиент %s отключился (всего: %d)", client.Username, len(m.Clients))
-			}
-
-		case message := <-m.Broadcast:
-			// Сохраняем в старую систему
-			messagesMu.Lock()
-			messages = append(messages, message)
-			messagesMu.Unlock()
-
-			// Сохраняем в БД
-			go saveMessageToDB(message)
-
-			data, _ := json.Marshal(message)
-			for client := range m.Clients {
-				select {
-				case client.Send <- data:
-				default:
-					close(client.Send)
-					delete(m.Clients, client)
-				}
-			}
-		}
-	}
-}
-
-// WebSocket обработчик
 func WebSocketHandler(w http.ResponseWriter, r *http.Request) {
-	// Проверка аутентификации
-	username := getSessionUser(r)
+	username := getUserFromSession(r)
 	if username == "" {
-		log.Printf("Неавторизованная попытка подключения к WebSocket")
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
 
-	// Устанавливаем WebSocket соединение
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Printf("Ошибка установки WebSocket соединения: %v", err)
+		log.Print("❌ Ошибка upgrade:", err)
 		return
 	}
 
-	// Создаем клиента
 	client := &Client{
-		Conn:     conn,
-		Username: username,
-		Send:     make(chan interface{}, 256),
+		conn:     conn,
+		send:     make(chan models.Message, 256),
+		username: username,
 	}
 
-	// Регистрируем клиента
-	manager.Register <- client
+	register <- client
 
-	// Запускаем горутины для чтения и записи
-	go client.WritePump()
-	go client.ReadPump()
-
-	log.Printf("Пользователь %s подключился к WebSocket", username)
+	go writePump(client)
+	go readPump(client)
 }
 
-// WritePump отправляет сообщения клиенту
-func (c *Client) WritePump() {
+func readPump(client *Client) {
 	defer func() {
-		c.Conn.Close()
+		unregister <- client
+		client.conn.Close()
 	}()
-
-	for message := range c.Send {
-		// message может быть Message, []byte, или чем угодно
-		var data []byte
-		var err error
-
-		switch v := message.(type) {
-		case []byte:
-			data = v // уже сериализовано
-		default:
-			data, err = json.Marshal(v) // сериализуем
-		}
-
-		if err != nil {
-			log.Printf("❌ Ошибка сериализации: %v", err)
-			continue
-		}
-
-		c.Conn.WriteMessage(websocket.TextMessage, data)
-	}
-}
-
-// ReadPump читает сообщения от клиента
-func (c *Client) ReadPump() {
-	defer func() {
-		manager.Unregister <- c
-		c.Conn.Close()
-	}()
-
-	// Устанавливаем лимиты
-	c.Conn.SetReadLimit(512) // Максимальный размер сообщения 512 байт
-	c.Conn.SetReadDeadline(time.Now().Add(60 * time.Second))
-	c.Conn.SetPongHandler(func(string) error {
-		c.Conn.SetReadDeadline(time.Now().Add(60 * time.Second))
-		return nil
-	})
 
 	for {
 		var msg struct {
 			Text string `json:"text"`
 		}
-
-		err := c.Conn.ReadJSON(&msg)
+		err := client.conn.ReadJSON(&msg)
 		if err != nil {
-			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				log.Printf("Ошибка чтения сообщения от %s: %v", c.Username, err)
-			}
 			break
 		}
 
-		// Проверяем, что сообщение не пустое
-		if msg.Text == "" {
+		if msg.Text != "" {
+			// Создаем DTO для отправки в канал
+			broadcast <- models.Message{
+				Username:  client.username,
+				Text:      msg.Text,
+				Timestamp: time.Now(),
+			}
+		}
+	}
+}
+
+func writePump(client *Client) {
+	defer client.conn.Close()
+
+	for message := range client.send {
+		data, err := json.Marshal(message)
+		if err != nil {
+			log.Printf("❌ Ошибка сериализации: %v", err)
 			continue
 		}
 
-		// Создаем сообщение для рассылки
-		message := Message{
-			Username:  c.Username,
-			Text:      msg.Text,
-			Timestamp: time.Now(),
+		err = client.conn.WriteMessage(websocket.TextMessage, data)
+		if err != nil {
+			break
 		}
-
-		// Отправляем в канал broadcast
-		manager.Broadcast <- message
 	}
 }

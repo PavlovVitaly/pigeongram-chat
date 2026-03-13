@@ -5,7 +5,8 @@ import (
 	"errors"
 	"time"
 
-	"pigeongram/models"
+	"pigeongram/internal/models"
+	dto "pigeongram/pkg/models"
 
 	"gorm.io/gorm"
 )
@@ -19,17 +20,21 @@ func NewUserRepository(db *gorm.DB) *UserRepository {
 }
 
 // Create создает нового пользователя
-func (r *UserRepository) Create(ctx context.Context, user *models.User) error {
-	return r.db.WithContext(ctx).Create(user).Error
+func (r *UserRepository) Create(ctx context.Context, user *dto.User) error {
+	entity := &models.UserEntity{
+		Username: user.Username,
+		Password: user.Password,
+	}
+	return r.db.WithContext(ctx).Create(entity).Error
 }
 
 // GetByUsername находит пользователя по имени
-func (r *UserRepository) GetByUsername(ctx context.Context, username string) (*models.User, error) {
-	var user models.User
+func (r *UserRepository) GetByUsername(ctx context.Context, username string) (*models.UserEntity, error) {
+	var user models.UserEntity
 	err := r.db.WithContext(ctx).Where("username = ?", username).First(&user).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, nil // пользователь не найден
+			return nil, nil
 		}
 		return nil, err
 	}
@@ -37,8 +42,8 @@ func (r *UserRepository) GetByUsername(ctx context.Context, username string) (*m
 }
 
 // GetByID находит пользователя по ID
-func (r *UserRepository) GetByID(ctx context.Context, id uint) (*models.User, error) {
-	var user models.User
+func (r *UserRepository) GetByID(ctx context.Context, id uint) (*models.UserEntity, error) {
+	var user models.UserEntity
 	err := r.db.WithContext(ctx).First(&user, id).Error
 	if err != nil {
 		return nil, err
@@ -48,7 +53,7 @@ func (r *UserRepository) GetByID(ctx context.Context, id uint) (*models.User, er
 
 // UpdateLastSeen обновляет время последнего визита
 func (r *UserRepository) UpdateLastSeen(ctx context.Context, userID uint) error {
-	return r.db.WithContext(ctx).Model(&models.User{}).
+	return r.db.WithContext(ctx).Model(&models.UserEntity{}).
 		Where("id = ?", userID).
 		Update("last_seen", time.Now()).Error
 }
@@ -59,6 +64,5 @@ func (r *UserRepository) Validate(ctx context.Context, username, password string
 	if err != nil || user == nil {
 		return false, err
 	}
-	// ВРЕМЕННО: прямое сравнение паролей (потом заменим на bcrypt)
 	return user.Password == password, nil
 }

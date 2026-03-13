@@ -3,7 +3,8 @@ package postgres
 import (
 	"context"
 
-	"pigeongram/models"
+	"pigeongram/internal/models"
+	dto "pigeongram/pkg/models"
 
 	"gorm.io/gorm"
 )
@@ -17,16 +18,29 @@ func NewMessageRepository(db *gorm.DB) *MessageRepository {
 }
 
 // Create сохраняет новое сообщение
-func (r *MessageRepository) Create(ctx context.Context, message *models.Message) error {
-	return r.db.WithContext(ctx).Create(message).Error
+func (r *MessageRepository) Create(ctx context.Context, message *dto.Message) error {
+	// Находим пользователя по username из DTO
+	var user models.UserEntity
+	err := r.db.WithContext(ctx).Where("username = ?", message.Username).First(&user).Error
+	if err != nil {
+		return err
+	}
+
+	entity := &models.MessageEntity{
+		UserID:    user.ID,
+		Content:   message.Text,
+		Timestamp: message.Timestamp,
+	}
+
+	return r.db.WithContext(ctx).Create(entity).Error
 }
 
 // GetRecent возвращает последние N сообщений с информацией о пользователях
-func (r *MessageRepository) GetRecent(ctx context.Context, limit int) ([]models.Message, error) {
-	var messages []models.Message
+func (r *MessageRepository) GetRecent(ctx context.Context, limit int) ([]models.MessageEntity, error) {
+	var messages []models.MessageEntity
 
 	err := r.db.WithContext(ctx).
-		Preload("User"). // Загружаем связанного пользователя
+		Preload("User").
 		Order("timestamp desc").
 		Limit(limit).
 		Find(&messages).Error
@@ -44,8 +58,8 @@ func (r *MessageRepository) GetRecent(ctx context.Context, limit int) ([]models.
 }
 
 // GetHistory возвращает сообщения с пагинацией
-func (r *MessageRepository) GetHistory(ctx context.Context, offset, limit int) ([]models.Message, error) {
-	var messages []models.Message
+func (r *MessageRepository) GetHistory(ctx context.Context, offset, limit int) ([]models.MessageEntity, error) {
+	var messages []models.MessageEntity
 
 	err := r.db.WithContext(ctx).
 		Preload("User").
