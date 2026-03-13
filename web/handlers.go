@@ -1,12 +1,17 @@
 package web
 
 import (
+	"context"
 	"html/template"
+	"log"
 	"math/rand"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
+
+	"pigeongram/models"
+	"pigeongram/repository/postgres"
 )
 
 // Структуры данных
@@ -27,6 +32,11 @@ type Session struct {
 
 // Хранилища
 var (
+	userRepo    *postgres.UserRepository
+	msgRepo     *postgres.MessageRepository
+	sessionRepo *postgres.SessionRepository
+
+	// Пока оставляем старые in-memory хранилища для совместимости
 	users      = make(map[string]User)
 	messages   = make([]Message, 0)
 	sessions   = make(map[string]Session)
@@ -34,6 +44,14 @@ var (
 	messagesMu sync.RWMutex
 	sessionsMu sync.RWMutex
 )
+
+// InitStores инициализирует репозитории БД
+func InitStores(ur *postgres.UserRepository, mr *postgres.MessageRepository, sr *postgres.SessionRepository) {
+	userRepo = ur
+	msgRepo = mr
+	sessionRepo = sr
+	log.Println("📦 Репозитории PostgreSQL инициализированы")
+}
 
 // Инициализация хранилищ
 func InitUserStore() {
@@ -153,18 +171,47 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	usersMu.RLock()
-	user, exists := users[username]
-	usersMu.RUnlock()
+	// Проверяем в БД
+	var valid bool
+	var err error
+	if userRepo != nil {
+		ctx := context.Background()
+		valid, err = userRepo.Validate(ctx, username, password)
+		if err != nil {
+			log.Printf("❌ Ошибка проверки пользователя: %v", err)
+		}
+	}
 
-	if !exists || user.Password != password {
+	// Если не нашли в БД, проверяем в памяти
+	if !valid {
+		usersMu.RLock()
+		user, exists := users[username]
+		usersMu.RUnlock()
+		valid = exists && user.Password == password
+	}
+
+	if !valid {
 		http.Redirect(w, r, "/?error=invalid", http.StatusSeeOther)
 		return
 	}
 
 	sessionID := generateSessionID()
+
+	// Сохраняем сессию в БД
+	if userRepo != nil && sessionRepo != nil {
+		ctx := context.Background()
+		user, _ := userRepo.GetByUsername(ctx, username)
+		if user != nil {
+			err := sessionRepo.CreateUserSession(ctx, user.ID, sessionID)
+			if err != nil {
+				log.Printf("❌ Ошибка сохранения сессии в БД: %v", err)
+			}
+		}
+	}
+
+	// Сохраняем сессию в памяти (для совместимости)
 	sessionsMu.Lock()
-	sessions[sessionID] = Session{Username: username}
+	sessions[sessionID] = Session{username}
 	sessionsMu.Unlock()
 
 	http.SetCookie(w, &http.Cookie{
@@ -172,9 +219,10 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 		Value:    sessionID,
 		Path:     "/",
 		HttpOnly: true,
-		MaxAge:   3600 * 24, // 24 часа
+		MaxAge:   86400,
 	})
 
+	log.Printf("✅ Пользователь %s вошел в систему", username)
 	http.Redirect(w, r, "/chat", http.StatusSeeOther)
 }
 
@@ -209,20 +257,58 @@ func RegisterHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	usersMu.Lock()
-	if _, exists := users[username]; exists {
-		usersMu.Unlock()
-		http.Redirect(w, r, "/register?error=user_exists", http.StatusSeeOther)
+	// Проверяем существование в БД
+	exists := false
+	if userRepo != nil {
+		ctx := context.Background()
+		user, _ := userRepo.GetByUsername(ctx, username)
+		exists = user != nil
+	}
+
+	// Проверяем в памяти
+	if !exists {
+		usersMu.RLock()
+		_, exists = users[username]
+		usersMu.RUnlock()
+	}
+
+	if exists {
+		http.Redirect(w, r, "/register?error=exists", http.StatusSeeOther)
 		return
 	}
 
-	users[username] = User{Username: username, Password: password}
+	// Сохраняем в БД
+	if userRepo != nil {
+		ctx := context.Background()
+		newUser := &models.User{
+			Username: username,
+			Password: password, // TODO: добавить хеширование
+		}
+		err := userRepo.Create(ctx, newUser)
+		if err != nil {
+			log.Printf("❌ Ошибка сохранения пользователя в БД: %v", err)
+		}
+	}
+
+	// Сохраняем в памяти
+	usersMu.Lock()
+	users[username] = User{username, password}
 	usersMu.Unlock()
 
-	// Автоматический логин после регистрации
 	sessionID := generateSessionID()
+
+	// Создаем сессию в БД
+	if userRepo != nil && sessionRepo != nil {
+		ctx := context.Background()
+		user, _ := userRepo.GetByUsername(ctx, username)
+		if user != nil {
+			sessionRepo.CreateUserSession(ctx, user.ID, sessionID)
+		}
+	}
+
+	// Сохраняем сессию в памяти
 	sessionsMu.Lock()
-	sessions[sessionID] = Session{Username: username}
+	sessions[sessionID] = Session{username}
 	sessionsMu.Unlock()
 
 	http.SetCookie(w, &http.Cookie{
@@ -230,13 +316,12 @@ func RegisterHandler(w http.ResponseWriter, r *http.Request) {
 		Value:    sessionID,
 		Path:     "/",
 		HttpOnly: true,
-		MaxAge:   3600 * 24,
+		MaxAge:   86400,
 	})
 
+	log.Printf("✅ Новый пользователь зарегистрирован: %s", username)
 	http.Redirect(w, r, "/chat", http.StatusSeeOther)
 }
-
-// Добавьте эту функцию в файл handlers.go
 
 // LogoutHandler - обработчик выхода из системы
 func LogoutHandler(w http.ResponseWriter, r *http.Request) {
@@ -274,4 +359,30 @@ func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		}
 		next(w, r)
 	}
+}
+
+func getUserFromSession(r *http.Request) string {
+	cookie, err := r.Cookie("session_id")
+	if err != nil {
+		return ""
+	}
+
+	// Сначала проверяем в БД
+	if sessionRepo != nil {
+		ctx := context.Background()
+		session, err := sessionRepo.GetByID(ctx, cookie.Value)
+		if err == nil && session != nil && !session.IsExpired() {
+			return session.User.Username
+		}
+	}
+
+	// Fallback на старую систему
+	sessionsMu.RLock()
+	session, exists := sessions[cookie.Value]
+	sessionsMu.RUnlock()
+
+	if !exists {
+		return ""
+	}
+	return session.Username
 }

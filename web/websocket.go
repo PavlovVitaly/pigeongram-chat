@@ -1,10 +1,14 @@
 package web
 
 import (
+	"context"
+	"encoding/json"
 	"log"
 	"net/http"
 	"sync"
 	"time"
+
+	"pigeongram/models"
 
 	"github.com/gorilla/websocket"
 )
@@ -20,7 +24,7 @@ var upgrader = websocket.Upgrader{
 type Client struct {
 	Conn     *websocket.Conn
 	Username string
-	Send     chan Message
+	Send     chan interface{}
 }
 
 // WebSocket менеджер
@@ -33,6 +37,37 @@ type WebSocketManager struct {
 }
 
 var manager *WebSocketManager
+
+// Добавляем функцию для сохранения сообщений в БД
+func saveMessageToDB(msg Message) {
+	if msgRepo == nil {
+		return
+	}
+
+	ctx := context.Background()
+
+	// Находим пользователя
+	user, err := userRepo.GetByUsername(ctx, msg.Username)
+	if err != nil || user == nil {
+		log.Printf("❌ Не удалось найти пользователя %s в БД", msg.Username)
+		return
+	}
+
+	// Создаем сообщение для БД
+	dbMsg := &models.Message{
+		UserID:    user.ID,
+		Content:   msg.Text,
+		Timestamp: msg.Timestamp,
+	}
+
+	// Сохраняем
+	err = msgRepo.Create(ctx, dbMsg)
+	if err != nil {
+		log.Printf("❌ Ошибка сохранения сообщения в БД: %v", err)
+	} else {
+		log.Printf("💾 Сообщение сохранено в БД")
+	}
+}
 
 // Инициализация WebSocket менеджера
 func InitWebSocket() {
@@ -51,45 +86,60 @@ func (m *WebSocketManager) Run() {
 	for {
 		select {
 		case client := <-m.Register:
-			m.Mutex.Lock()
 			m.Clients[client] = true
-			m.Mutex.Unlock()
+			log.Printf("🔌 Клиент %s подключился (всего: %d)", client.Username, len(m.Clients))
 
-			// Отправляем историю сообщений новому клиенту
-			messagesMu.RLock()
-			for _, msg := range messages {
-				client.Send <- msg
+			// Загружаем историю из БД
+			if msgRepo != nil {
+				ctx := context.Background()
+				recent, err := msgRepo.GetRecent(ctx, 100)
+				if err == nil {
+					for _, msg := range recent {
+						// Конвертируем из модели в старый формат
+						oldMsg := Message{
+							Username:  msg.User.Username,
+							Text:      msg.Content,
+							Timestamp: msg.Timestamp,
+						}
+						client.Send <- oldMsg
+					}
+					log.Printf("📜 Загружено %d сообщений из БД", len(recent))
+				}
+			} else {
+				// Fallback на старую систему
+				messagesMu.RLock()
+				for _, msg := range messages {
+					data, _ := json.Marshal(msg)
+					client.Send <- data
+				}
+				messagesMu.RUnlock()
 			}
-			messagesMu.RUnlock()
-
-			log.Printf("Клиент %s подключился. Всего клиентов: %d", client.Username, len(m.Clients))
 
 		case client := <-m.Unregister:
-			m.Mutex.Lock()
 			if _, ok := m.Clients[client]; ok {
 				delete(m.Clients, client)
 				close(client.Send)
-				log.Printf("Клиент %s отключился. Всего клиентов: %d", client.Username, len(m.Clients))
+				log.Printf("🔌 Клиент %s отключился (всего: %d)", client.Username, len(m.Clients))
 			}
-			m.Mutex.Unlock()
 
 		case message := <-m.Broadcast:
-			// Сохраняем сообщение в историю
+			// Сохраняем в старую систему
 			messagesMu.Lock()
 			messages = append(messages, message)
 			messagesMu.Unlock()
 
-			// Рассылаем всем клиентам
-			m.Mutex.RLock()
+			// Сохраняем в БД
+			go saveMessageToDB(message)
+
+			data, _ := json.Marshal(message)
 			for client := range m.Clients {
 				select {
-				case client.Send <- message:
+				case client.Send <- data:
 				default:
 					close(client.Send)
 					delete(m.Clients, client)
 				}
 			}
-			m.Mutex.RUnlock()
 		}
 	}
 }
@@ -115,7 +165,7 @@ func WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 	client := &Client{
 		Conn:     conn,
 		Username: username,
-		Send:     make(chan Message, 256),
+		Send:     make(chan interface{}, 256),
 	}
 
 	// Регистрируем клиента
@@ -134,21 +184,24 @@ func (c *Client) WritePump() {
 		c.Conn.Close()
 	}()
 
-	for {
-		select {
-		case message, ok := <-c.Send:
-			if !ok {
-				c.Conn.WriteMessage(websocket.CloseMessage, []byte{})
-				return
-			}
+	for message := range c.Send {
+		// message может быть Message, []byte, или чем угодно
+		var data []byte
+		var err error
 
-			// Отправляем сообщение в JSON формате
-			err := c.Conn.WriteJSON(message)
-			if err != nil {
-				log.Printf("Ошибка отправки сообщения клиенту %s: %v", c.Username, err)
-				return
-			}
+		switch v := message.(type) {
+		case []byte:
+			data = v // уже сериализовано
+		default:
+			data, err = json.Marshal(v) // сериализуем
 		}
+
+		if err != nil {
+			log.Printf("❌ Ошибка сериализации: %v", err)
+			continue
+		}
+
+		c.Conn.WriteMessage(websocket.TextMessage, data)
 	}
 }
 
