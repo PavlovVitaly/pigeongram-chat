@@ -57,11 +57,8 @@ func InitPostgres(config *DatabaseConfig) (*gorm.DB, error) {
 
 	// Подключение к БД
 	db, err := gorm.Open(postgres.Open(config.DSN()), &gorm.Config{
-		Logger: gormLogger,
-		// Отключаем автоматическое создание внешних ключей
+		Logger:                                   gormLogger,
 		DisableForeignKeyConstraintWhenMigrating: true,
-		// Отключаем автоматическое экранирование имен
-		NamingStrategy: nil,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("ошибка подключения к БД: %w", err)
@@ -78,59 +75,82 @@ func InitPostgres(config *DatabaseConfig) (*gorm.DB, error) {
 	sqlDB.SetMaxOpenConns(100)
 	sqlDB.SetConnMaxLifetime(time.Hour)
 
-	// Временно удаляем всё, что может мешать миграции
-	log.Println("🔄 Очистка базы данных перед миграцией...")
+	// ✅ ПРОВЕРЯЕМ, ЕСТЬ ЛИ ТАБЛИЦЫ, А НЕ УДАЛЯЕМ ИХ
+	var tableCount int64
+	db.Raw("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public'").Scan(&tableCount)
 
-	// Удаляем представления
+	// Если таблиц нет - создаем их и добавляем тестовые данные
+	if tableCount == 0 {
+		log.Println("📦 Таблицы не найдены. Создаем новые...")
+
+		// Создаем таблицы через AutoMigrate
+		if err := db.AutoMigrate(&models.User{}, &models.Message{}, &models.Session{}); err != nil {
+			return nil, fmt.Errorf("ошибка миграции: %w", err)
+		}
+		log.Println("✅ Таблицы созданы")
+
+		// Создаем индексы
+		createIndexes(db)
+
+		// Создаем функции и представления
+		createFunctionsAndViews(db)
+
+		// Создаем тестовые данные
+		createTestData(db)
+	} else {
+		log.Printf("✅ Найдено %d таблиц в базе данных. Пропускаем инициализацию.", tableCount)
+
+		// Проверяем, нужно ли обновить схему (без потери данных)
+		// AutoMigrate должен быть безопасным - он добавит новые колонки/индексы, но не удалит данные
+		log.Println("🔄 Проверка и обновление схемы без потери данных...")
+		if err := db.AutoMigrate(&models.User{}, &models.Message{}, &models.Session{}); err != nil {
+			log.Printf("⚠️ Ошибка при обновлении схемы: %v", err)
+		} else {
+			log.Println("✅ Схема обновлена")
+		}
+
+		// Создаем индексы, если их нет (операция IF NOT EXISTS безопасна)
+		createIndexes(db)
+
+		// Обновляем функции и представления (DROP + CREATE безопасны)
+		createFunctionsAndViews(db)
+	}
+
+	return db, nil
+}
+
+// createIndexes создает индексы (безопасно - с IF NOT EXISTS)
+func createIndexes(db *gorm.DB) {
+	log.Println("📊 Проверка индексов...")
+
+	indexes := []string{
+		"CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)",
+		"CREATE INDEX IF NOT EXISTS idx_users_last_seen ON users(last_seen)",
+		"CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp DESC)",
+		"CREATE INDEX IF NOT EXISTS idx_messages_user_id ON messages(user_id)",
+		"CREATE INDEX IF NOT EXISTS idx_sessions_session_id ON sessions(session_id)",
+		"CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at)",
+		"CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id)",
+	}
+
+	for _, idx := range indexes {
+		if err := db.Exec(idx).Error; err != nil {
+			log.Printf("⚠️ Ошибка создания индекса: %v", err)
+		}
+	}
+	log.Println("✅ Индексы проверены")
+}
+
+// createFunctionsAndViews создает функции и представления
+func createFunctionsAndViews(db *gorm.DB) {
+	log.Println("🔄 Проверка функций и представлений...")
+
+	// Удаляем старые версии (безопасно)
 	db.Exec("DROP VIEW IF EXISTS active_users CASCADE")
 	db.Exec("DROP FUNCTION IF EXISTS get_recent_messages(INTEGER) CASCADE")
 
-	// Удаляем индексы, если они есть (игнорируем ошибки)
-	db.Exec("DROP INDEX IF EXISTS idx_users_username")
-	db.Exec("DROP INDEX IF EXISTS idx_users_last_seen")
-	db.Exec("DROP INDEX IF EXISTS idx_messages_timestamp")
-	db.Exec("DROP INDEX IF EXISTS idx_messages_user_id")
-	db.Exec("DROP INDEX IF EXISTS idx_sessions_session_id")
-	db.Exec("DROP INDEX IF EXISTS idx_sessions_expires_at")
-
-	// Удаляем таблицы в правильном порядке (из-за зависимостей)
-	log.Println("🔄 Удаление существующих таблиц...")
-	db.Exec("DROP TABLE IF EXISTS sessions CASCADE")
-	db.Exec("DROP TABLE IF EXISTS messages CASCADE")
-	db.Exec("DROP TABLE IF EXISTS users CASCADE")
-
-	// Теперь создаем таблицы через AutoMigrate
-	log.Println("📦 Создание таблиц через AutoMigrate...")
-
-	// Создаем таблицы по одной
-	if err := db.AutoMigrate(&models.User{}); err != nil {
-		return nil, fmt.Errorf("ошибка миграции users: %w", err)
-	}
-	log.Println("✅ Таблица users создана")
-
-	if err := db.AutoMigrate(&models.Message{}); err != nil {
-		return nil, fmt.Errorf("ошибка миграции messages: %w", err)
-	}
-	log.Println("✅ Таблица messages создана")
-
-	if err := db.AutoMigrate(&models.Session{}); err != nil {
-		return nil, fmt.Errorf("ошибка миграции sessions: %w", err)
-	}
-	log.Println("✅ Таблица sessions создана")
-
-	// Создаем индексы вручную
-	log.Println("📊 Создание индексов...")
-	db.Exec("CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)")
-	db.Exec("CREATE INDEX IF NOT EXISTS idx_users_last_seen ON users(last_seen)")
-	db.Exec("CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp DESC)")
-	db.Exec("CREATE INDEX IF NOT EXISTS idx_messages_user_id ON messages(user_id)")
-	db.Exec("CREATE INDEX IF NOT EXISTS idx_sessions_session_id ON sessions(session_id)")
-	db.Exec("CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at)")
-	db.Exec("CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id)")
-
-	// Восстанавливаем функцию get_recent_messages
-	log.Println("🔄 Создание функции get_recent_messages...")
-	err = db.Exec(`
+	// Создаем функцию get_recent_messages
+	err := db.Exec(`
         CREATE OR REPLACE FUNCTION get_recent_messages(limit_count INTEGER)
         RETURNS TABLE (
             message_id INTEGER,
@@ -157,8 +177,7 @@ func InitPostgres(config *DatabaseConfig) (*gorm.DB, error) {
 		log.Printf("⚠️ Не удалось создать функцию: %v", err)
 	}
 
-	// Восстанавливаем представление active_users
-	log.Println("🔄 Создание представления active_users...")
+	// Создаем представление active_users
 	err = db.Exec(`
         CREATE OR REPLACE VIEW active_users AS
         SELECT DISTINCT u.id, u.username, u.last_seen
@@ -169,53 +188,53 @@ func InitPostgres(config *DatabaseConfig) (*gorm.DB, error) {
 		log.Printf("⚠️ Не удалось создать представление: %v", err)
 	}
 
-	// Создаем тестовых пользователей, если их нет
-	var count int64
-	db.Model(&models.User{}).Count(&count)
-	if count == 0 {
-		log.Println("👤 Создание тестовых пользователей...")
-		createTestUsers(db)
-	}
-
-	log.Println("✅ База данных успешно инициализирована")
-	return db, nil
+	log.Println("✅ Функции и представления проверены")
 }
 
-// createTestUsers создает тестовых пользователей
-func createTestUsers(db *gorm.DB) {
-	testUsers := []models.User{
-		{Username: "test", Password: "test"},
-		{Username: "admin", Password: "admin"},
-	}
+// createTestData создает тестовые данные ТОЛЬКО если таблицы пусты
+func createTestData(db *gorm.DB) {
+	log.Println("👤 Проверка наличия тестовых данных...")
 
-	for _, user := range testUsers {
-		// В реальном проекте пароль нужно хешировать!
-		result := db.Create(&user)
-		if result.Error != nil {
-			log.Printf("❌ Ошибка создания тестового пользователя %s: %v", user.Username, result.Error)
-		} else {
-			log.Printf("✅ Создан тестовый пользователь: %s", user.Username)
-		}
-	}
+	var userCount int64
+	db.Model(&models.User{}).Count(&userCount)
 
-	// Создаем тестовые сообщения
-	var testUser models.User
-	var adminUser models.User
+	if userCount == 0 {
+		log.Println("📝 Создание тестовых пользователей...")
 
-	db.Where("username = ?", "test").First(&testUser)
-	db.Where("username = ?", "admin").First(&adminUser)
-
-	if testUser.ID != 0 && adminUser.ID != 0 {
-		testMessages := []models.Message{
-			{UserID: testUser.ID, Content: "Добро пожаловать в PigeonGram! 🕊️", Timestamp: time.Now().Add(-5 * time.Minute)},
-			{UserID: adminUser.ID, Content: "База данных PostgreSQL готова к работе!", Timestamp: time.Now().Add(-4 * time.Minute)},
-			{UserID: testUser.ID, Content: "Теперь сообщения сохраняются надежно", Timestamp: time.Now().Add(-3 * time.Minute)},
-			{UserID: adminUser.ID, Content: "Docker контейнер работает отлично", Timestamp: time.Now().Add(-2 * time.Minute)},
+		testUsers := []models.User{
+			{Username: "test", Password: "test"},
+			{Username: "admin", Password: "admin"},
 		}
 
-		for _, msg := range testMessages {
-			db.Create(&msg)
+		for _, user := range testUsers {
+			result := db.Create(&user)
+			if result.Error != nil {
+				log.Printf("❌ Ошибка создания пользователя %s: %v", user.Username, result.Error)
+			}
 		}
-		log.Printf("✅ Создано %d тестовых сообщений", len(testMessages))
+
+		// Получаем созданных пользователей
+		var testUser, adminUser models.User
+		db.Where("username = ?", "test").First(&testUser)
+		db.Where("username = ?", "admin").First(&adminUser)
+
+		// Создаем тестовые сообщения
+		if testUser.ID != 0 && adminUser.ID != 0 {
+			log.Println("💬 Создание тестовых сообщений...")
+
+			testMessages := []models.Message{
+				{UserID: testUser.ID, Content: "Добро пожаловать в PigeonGram! 🕊️", Timestamp: time.Now().Add(-5 * time.Minute)},
+				{UserID: adminUser.ID, Content: "База данных PostgreSQL готова к работе!", Timestamp: time.Now().Add(-4 * time.Minute)},
+				{UserID: testUser.ID, Content: "Теперь сообщения сохраняются надежно", Timestamp: time.Now().Add(-3 * time.Minute)},
+				{UserID: adminUser.ID, Content: "Данные сохраняются между перезапусками!", Timestamp: time.Now().Add(-2 * time.Minute)},
+			}
+
+			for _, msg := range testMessages {
+				db.Create(&msg)
+			}
+			log.Printf("✅ Создано %d тестовых сообщений", len(testMessages))
+		}
+	} else {
+		log.Printf("✅ Найдено %d пользователей. Тестовые данные уже существуют.", userCount)
 	}
 }
