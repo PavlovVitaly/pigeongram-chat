@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"log"
 	"math/rand"
 	"net/http"
@@ -13,12 +14,25 @@ import (
 )
 
 func main() {
+	// Флаги командной строки
+	resetDB := flag.Bool("reset-db", false, "Сбросить базу данных при запуске")
+	flag.Parse()
+
 	// Инициализация генератора случайных чисел
 	rand.Seed(time.Now().UnixNano())
 
 	// 1. Инициализация PostgreSQL
 	log.Println("📦 Подключение к PostgreSQL...")
 	dbConfig := config.NewDefaultConfig()
+
+	// Переопределяем ResetDB из флага командной строки
+	if *resetDB {
+		dbConfig.ResetDB = true
+		log.Println("⚠️⚠️⚠️ РЕЖИМ СБРОСА БАЗЫ ДАННЫХ АКТИВИРОВАН (флаг -reset-db) ⚠️⚠️⚠️")
+	} else if dbConfig.ResetDB {
+		log.Println("⚠️⚠️⚠️ РЕЖИМ СБРОСА БАЗЫ ДАННЫХ АКТИВИРОВАН (переменная окружения) ⚠️⚠️⚠️")
+	}
+
 	db, err := config.InitPostgres(dbConfig)
 	if err != nil {
 		log.Fatal("❌ Ошибка подключения к БД:", err)

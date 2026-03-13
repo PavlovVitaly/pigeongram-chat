@@ -3,6 +3,8 @@ package config
 import (
 	"fmt"
 	"log"
+	"os"
+	"strconv"
 	"time"
 
 	"gorm.io/driver/postgres"
@@ -20,18 +22,44 @@ type DatabaseConfig struct {
 	Password string
 	DBName   string
 	SSLMode  string
+	ResetDB  bool // Флаг для сброса базы данных
 }
 
 // NewDefaultConfig создает конфигурацию по умолчанию для разработки
 func NewDefaultConfig() *DatabaseConfig {
 	return &DatabaseConfig{
-		Host:     "localhost",
-		Port:     5432,
-		User:     "pigeongram",
-		Password: "pigeongram_secret",
-		DBName:   "pigeongram",
-		SSLMode:  "disable",
+		Host:     getEnv("DB_HOST", "localhost"),
+		Port:     getEnvAsInt("DB_PORT", 5432),
+		User:     getEnv("DB_USER", "pigeongram"),
+		Password: getEnv("DB_PASSWORD", "pigeongram_secret"),
+		DBName:   getEnv("DB_NAME", "pigeongram"),
+		SSLMode:  getEnv("DB_SSLMODE", "disable"),
+		ResetDB:  getEnvAsBool("PIGEONGRAM_RESET_DB", false), // ← Только ENV, без флагов
 	}
+}
+
+// Вспомогательные функции для работы с переменными окружения
+func getEnv(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return defaultValue
+}
+
+func getEnvAsInt(key string, defaultValue int) int {
+	if value := os.Getenv(key); value != "" {
+		if intVal, err := strconv.Atoi(value); err == nil {
+			return intVal
+		}
+	}
+	return defaultValue
+}
+
+func getEnvAsBool(key string, defaultValue bool) bool {
+	if value := os.Getenv(key); value != "" {
+		return value == "true" || value == "1" || value == "yes"
+	}
+	return defaultValue
 }
 
 // DSN возвращает строку подключения
@@ -75,51 +103,88 @@ func InitPostgres(config *DatabaseConfig) (*gorm.DB, error) {
 	sqlDB.SetMaxOpenConns(100)
 	sqlDB.SetConnMaxLifetime(time.Hour)
 
-	// ✅ ПРОВЕРЯЕМ, ЕСТЬ ЛИ ТАБЛИЦЫ, А НЕ УДАЛЯЕМ ИХ
-	var tableCount int64
-	db.Raw("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public'").Scan(&tableCount)
+	// ===== ОПЦИОНАЛЬНЫЙ СБРОС БАЗЫ ДАННЫХ =====
+	if config.ResetDB {
+		log.Println("⚠️⚠️⚠️ ВНИМАНИЕ: Выполняется сброс базы данных! ⚠️⚠️⚠️")
+		log.Println("Все существующие данные будут удалены!")
 
-	// Если таблиц нет - создаем их и добавляем тестовые данные
-	if tableCount == 0 {
-		log.Println("📦 Таблицы не найдены. Создаем новые...")
+		// Спрашиваем подтверждение, если запущено в интерактивном режиме
+		if !isRunningInDocker() {
+			fmt.Print("Продолжить? (y/N): ")
+			var response string
+			fmt.Scanln(&response)
+			if response != "y" && response != "Y" {
+				log.Println("❌ Сброс отменен")
+				os.Exit(0)
+			}
+		}
 
-		// Создаем таблицы через AutoMigrate
+		// Удаляем всё в правильном порядке
+		log.Println("🔄 Удаление существующих таблиц...")
+		db.Exec("DROP VIEW IF EXISTS active_users CASCADE")
+		db.Exec("DROP FUNCTION IF EXISTS get_recent_messages(INTEGER) CASCADE")
+		db.Exec("DROP TABLE IF EXISTS sessions CASCADE")
+		db.Exec("DROP TABLE IF EXISTS messages CASCADE")
+		db.Exec("DROP TABLE IF EXISTS users CASCADE")
+
+		log.Println("✅ База данных очищена")
+
+		// Создаем таблицы заново
+		log.Println("📦 Создание таблиц...")
 		if err := db.AutoMigrate(&models.User{}, &models.Message{}, &models.Session{}); err != nil {
 			return nil, fmt.Errorf("ошибка миграции: %w", err)
 		}
-		log.Println("✅ Таблицы созданы")
 
-		// Создаем индексы
 		createIndexes(db)
-
-		// Создаем функции и представления
 		createFunctionsAndViews(db)
-
-		// Создаем тестовые данные
 		createTestData(db)
-	} else {
-		log.Printf("✅ Найдено %d таблиц в базе данных. Пропускаем инициализацию.", tableCount)
 
-		// Проверяем, нужно ли обновить схему (без потери данных)
-		// AutoMigrate должен быть безопасным - он добавит новые колонки/индексы, но не удалит данные
-		log.Println("🔄 Проверка и обновление схемы без потери данных...")
+		log.Println("✅ База данных пересоздана с тестовыми данными")
+		return db, nil
+	}
+
+	// ===== НОРМАЛЬНЫЙ РЕЖИМ (БЕЗ СБРОСА) =====
+
+	// Проверяем, есть ли таблицы
+	var tableCount int64
+	db.Raw("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public'").Scan(&tableCount)
+
+	if tableCount == 0 {
+		log.Println("📦 Таблицы не найдены. Создаем новые...")
+
+		// Создаем таблицы
 		if err := db.AutoMigrate(&models.User{}, &models.Message{}, &models.Session{}); err != nil {
-			log.Printf("⚠️ Ошибка при обновлении схемы: %v", err)
-		} else {
-			log.Println("✅ Схема обновлена")
+			return nil, fmt.Errorf("ошибка миграции: %w", err)
 		}
 
-		// Создаем индексы, если их нет (операция IF NOT EXISTS безопасна)
 		createIndexes(db)
+		createFunctionsAndViews(db)
+		createTestData(db)
+	} else {
+		log.Printf("✅ Найдено %d таблиц. Проверяем схему...", tableCount)
 
-		// Обновляем функции и представления (DROP + CREATE безопасны)
+		// Обновляем схему без потери данных
+		if err := db.AutoMigrate(&models.User{}, &models.Message{}, &models.Session{}); err != nil {
+			log.Printf("⚠️ Ошибка при обновлении схемы: %v", err)
+		}
+
+		// Обновляем индексы, функции и представления
+		createIndexes(db)
 		createFunctionsAndViews(db)
 	}
 
 	return db, nil
 }
 
-// createIndexes создает индексы (безопасно - с IF NOT EXISTS)
+// isRunningInDocker проверяет, запущено ли приложение в Docker контейнере
+func isRunningInDocker() bool {
+	if _, err := os.Stat("/.dockerenv"); err == nil {
+		return true
+	}
+	return false
+}
+
+// createIndexes создает индексы
 func createIndexes(db *gorm.DB) {
 	log.Println("📊 Проверка индексов...")
 
@@ -145,12 +210,12 @@ func createIndexes(db *gorm.DB) {
 func createFunctionsAndViews(db *gorm.DB) {
 	log.Println("🔄 Проверка функций и представлений...")
 
-	// Удаляем старые версии (безопасно)
+	// Удаляем старые версии
 	db.Exec("DROP VIEW IF EXISTS active_users CASCADE")
 	db.Exec("DROP FUNCTION IF EXISTS get_recent_messages(INTEGER) CASCADE")
 
 	// Создаем функцию get_recent_messages
-	err := db.Exec(`
+	db.Exec(`
         CREATE OR REPLACE FUNCTION get_recent_messages(limit_count INTEGER)
         RETURNS TABLE (
             message_id INTEGER,
@@ -172,26 +237,20 @@ func createFunctionsAndViews(db *gorm.DB) {
             LIMIT limit_count;
         END;
         $$ LANGUAGE plpgsql;
-    `).Error
-	if err != nil {
-		log.Printf("⚠️ Не удалось создать функцию: %v", err)
-	}
+    `)
 
 	// Создаем представление active_users
-	err = db.Exec(`
+	db.Exec(`
         CREATE OR REPLACE VIEW active_users AS
         SELECT DISTINCT u.id, u.username, u.last_seen
         FROM users u
         WHERE u.last_seen > NOW() - INTERVAL '5 minutes';
-    `).Error
-	if err != nil {
-		log.Printf("⚠️ Не удалось создать представление: %v", err)
-	}
+    `)
 
 	log.Println("✅ Функции и представления проверены")
 }
 
-// createTestData создает тестовые данные ТОЛЬКО если таблицы пусты
+// createTestData создает тестовые данные
 func createTestData(db *gorm.DB) {
 	log.Println("👤 Проверка наличия тестовых данных...")
 
@@ -207,10 +266,7 @@ func createTestData(db *gorm.DB) {
 		}
 
 		for _, user := range testUsers {
-			result := db.Create(&user)
-			if result.Error != nil {
-				log.Printf("❌ Ошибка создания пользователя %s: %v", user.Username, result.Error)
-			}
+			db.Create(&user)
 		}
 
 		// Получаем созданных пользователей
@@ -235,6 +291,6 @@ func createTestData(db *gorm.DB) {
 			log.Printf("✅ Создано %d тестовых сообщений", len(testMessages))
 		}
 	} else {
-		log.Printf("✅ Найдено %d пользователей. Тестовые данные уже существуют.", userCount)
+		log.Printf("✅ Найдено %d пользователей", userCount)
 	}
 }
