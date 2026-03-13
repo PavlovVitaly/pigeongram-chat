@@ -17,6 +17,7 @@ import (
 func main() {
 	// Флаги командной строки
 	resetDB := flag.Bool("reset-db", false, "Сбросить базу данных при запуске")
+	useRedis := flag.Bool("use-redis", true, "Использовать Redis для кэша")
 	flag.Parse()
 
 	// Инициализация генератора случайных чисел
@@ -40,9 +41,42 @@ func main() {
 	}
 	log.Println("✅ PostgreSQL подключен успешно")
 
-	// 2. Инициализация кэша (временная реализация в памяти)
-	log.Println("🚀 Инициализация кэша...")
-	messageCache := cache.NewMemoryCache(5 * time.Minute) // TTL 5 минут
+	// Инициализация кэша (Redis или Memory)
+	var messageCache cache.Cache
+	redisConfig := config.NewRedisConfigReader()
+
+	if *useRedis && redisConfig.IsEnabled() {
+		log.Println("🚀 Инициализация Redis кэша...")
+		host, port, password, db, ttl := redisConfig.Load()
+
+		redisCache, err := cache.NewRedisCache(cache.RedisConfig{
+			Host:     host,
+			Port:     port,
+			Password: password,
+			DB:       db,
+			TTL:      ttl,
+			Prefix:   redisConfig.GetCachePrefix(),
+		})
+
+		if err != nil {
+			log.Printf("⚠️ Ошибка подключения к Redis: %v", err)
+			log.Println("⚠️ Используем MemoryCache как запасной вариант")
+			messageCache = cache.NewMemoryCache(5 * time.Minute)
+		} else {
+			messageCache = redisCache
+			log.Println("✅ Redis кэш инициализирован")
+
+			// Очистка при подключении (опционально)
+			if *resetDB {
+				ctx := context.Background()
+				redisCache.FlushAll(ctx)
+				log.Println("🧹 Redis кэш очищен")
+			}
+		}
+	} else {
+		log.Println("🚀 Используем MemoryCache (в памяти)")
+		messageCache = cache.NewMemoryCache(5 * time.Minute)
+	}
 
 	// 3. Создаем репозитории
 	userRepo := postgres.NewUserRepository(db)
@@ -83,6 +117,7 @@ func main() {
 
 	log.Println("Сервер запущен на http://localhost:8080")
 	log.Println("📊 База данных: PostgreSQL")
+	log.Printf("📊 Кэш: %v", map[bool]string{true: "Redis", false: "Memory"}[*useRedis && redisConfig.IsEnabled()])
 	log.Println("Тестовые учетные записи: test/test, admin/admin")
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }

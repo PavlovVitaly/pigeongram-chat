@@ -84,11 +84,25 @@ services:
     networks:
       - pigeongram_network
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-a", "redis_secret", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
-
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: pigeongram_redis_commander
+    restart: unless-stopped
+    environment:
+      REDIS_HOSTS: local:redis:6379:0:redis_secret
+      REDIS_PASSWORD: redis_secret
+    ports:
+      - "8081:8081"
+    networks:
+      - pigeongram_network
+    depends_on:
+      redis:
+        condition: service_healthy
+        
 networks:
   pigeongram_network:
     driver: bridge

@@ -3,15 +3,11 @@ package config
 import (
 	"fmt"
 	"log"
-	"os"
-	"strconv"
 	"time"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
-
-	"pigeongram/models"
 )
 
 // DatabaseConfig хранит настройки подключения к БД
@@ -22,44 +18,22 @@ type DatabaseConfig struct {
 	Password string
 	DBName   string
 	SSLMode  string
-	ResetDB  bool // Флаг для сброса базы данных
+	ResetDB  bool
+	Force    bool
 }
 
 // NewDefaultConfig создает конфигурацию по умолчанию для разработки
 func NewDefaultConfig() *DatabaseConfig {
 	return &DatabaseConfig{
-		Host:     getEnv("DB_HOST", "localhost"),
-		Port:     getEnvAsInt("DB_PORT", 5432),
-		User:     getEnv("DB_USER", "pigeongram"),
-		Password: getEnv("DB_PASSWORD", "pigeongram_secret"),
-		DBName:   getEnv("DB_NAME", "pigeongram"),
-		SSLMode:  getEnv("DB_SSLMODE", "disable"),
-		ResetDB:  getEnvAsBool("PIGEONGRAM_RESET_DB", false), // ← Только ENV, без флагов
+		Host:     GetEnv("DB_HOST", "localhost"),
+		Port:     GetEnvAsInt("DB_PORT", 5432),
+		User:     GetEnv("DB_USER", "pigeongram"),
+		Password: GetEnv("DB_PASSWORD", "pigeongram_secret"),
+		DBName:   GetEnv("DB_NAME", "pigeongram"),
+		SSLMode:  GetEnv("DB_SSLMODE", "disable"),
+		ResetDB:  GetEnvAsBool("PIGEONGRAM_RESET_DB", false),
+		Force:    GetEnvAsBool("PIGEONGRAM_FORCE", false),
 	}
-}
-
-// Вспомогательные функции для работы с переменными окружения
-func getEnv(key, defaultValue string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return defaultValue
-}
-
-func getEnvAsInt(key string, defaultValue int) int {
-	if value := os.Getenv(key); value != "" {
-		if intVal, err := strconv.Atoi(value); err == nil {
-			return intVal
-		}
-	}
-	return defaultValue
-}
-
-func getEnvAsBool(key string, defaultValue bool) bool {
-	if value := os.Getenv(key); value != "" {
-		return value == "true" || value == "1" || value == "yes"
-	}
-	return defaultValue
 }
 
 // DSN возвращает строку подключения
@@ -83,10 +57,10 @@ func InitPostgres(config *DatabaseConfig) (*gorm.DB, error) {
 		},
 	)
 
-	// Подключение к БД
+	// Подключение к БД с отключенными внешними ключами
 	db, err := gorm.Open(postgres.Open(config.DSN()), &gorm.Config{
 		Logger:                                   gormLogger,
-		DisableForeignKeyConstraintWhenMigrating: true,
+		DisableForeignKeyConstraintWhenMigrating: true, // Отключаем внешние ключи при миграции
 	})
 	if err != nil {
 		return nil, fmt.Errorf("ошибка подключения к БД: %w", err)
@@ -103,90 +77,98 @@ func InitPostgres(config *DatabaseConfig) (*gorm.DB, error) {
 	sqlDB.SetMaxOpenConns(100)
 	sqlDB.SetConnMaxLifetime(time.Hour)
 
-	// ===== ОПЦИОНАЛЬНЫЙ СБРОС БАЗЫ ДАННЫХ =====
+	// Если нужен сброс - удаляем всё
 	if config.ResetDB {
-		log.Println("⚠️⚠️⚠️ ВНИМАНИЕ: Выполняется сброс базы данных! ⚠️⚠️⚠️")
-		log.Println("Все существующие данные будут удалены!")
+		log.Println("⚠️ Сброс базы данных...")
 
-		// Спрашиваем подтверждение, если запущено в интерактивном режиме
-		if !isRunningInDocker() {
-			fmt.Print("Продолжить? (y/N): ")
-			var response string
-			fmt.Scanln(&response)
-			if response != "y" && response != "Y" {
-				log.Println("❌ Сброс отменен")
-				os.Exit(0)
-			}
-		}
-
-		// Удаляем всё в правильном порядке
-		log.Println("🔄 Удаление существующих таблиц...")
+		// Удаляем представления
 		db.Exec("DROP VIEW IF EXISTS active_users CASCADE")
+
+		// Удаляем функции
 		db.Exec("DROP FUNCTION IF EXISTS get_recent_messages(INTEGER) CASCADE")
+
+		// Удаляем таблицы в правильном порядке
 		db.Exec("DROP TABLE IF EXISTS sessions CASCADE")
 		db.Exec("DROP TABLE IF EXISTS messages CASCADE")
 		db.Exec("DROP TABLE IF EXISTS users CASCADE")
 
 		log.Println("✅ База данных очищена")
-
-		// Создаем таблицы заново
-		log.Println("📦 Создание таблиц...")
-		if err := db.AutoMigrate(&models.User{}, &models.Message{}, &models.Session{}); err != nil {
-			return nil, fmt.Errorf("ошибка миграции: %w", err)
-		}
-
-		createIndexes(db)
-		createFunctionsAndViews(db)
-		createTestData(db)
-
-		log.Println("✅ База данных пересоздана с тестовыми данными")
-		return db, nil
 	}
 
-	// ===== НОРМАЛЬНЫЙ РЕЖИМ (БЕЗ СБРОСА) =====
+	// Включаем расширение для UUID (если нужно)
+	db.Exec("CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\";")
 
-	// Проверяем, есть ли таблицы
-	var tableCount int64
-	db.Raw("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public'").Scan(&tableCount)
+	// Создаем таблицы вручную через Exec, чтобы избежать проблем с индексами
+	log.Println("📦 Создание таблиц...")
 
-	if tableCount == 0 {
-		log.Println("📦 Таблицы не найдены. Создаем новые...")
+	// Таблица users
+	if err := db.Exec(`
+        CREATE TABLE IF NOT EXISTS users (
+            id SERIAL PRIMARY KEY,
+            username VARCHAR(50) NOT NULL,
+            password VARCHAR(255) NOT NULL,
+            last_seen TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            deleted_at TIMESTAMP WITH TIME ZONE,
+            CONSTRAINT users_username_unique UNIQUE (username)
+        );
+    `).Error; err != nil {
+		return nil, fmt.Errorf("ошибка создания таблицы users: %w", err)
+	}
 
-		// Создаем таблицы
-		if err := db.AutoMigrate(&models.User{}, &models.Message{}, &models.Session{}); err != nil {
-			return nil, fmt.Errorf("ошибка миграции: %w", err)
-		}
+	// Таблица messages
+	if err := db.Exec(`
+        CREATE TABLE IF NOT EXISTS messages (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            content TEXT NOT NULL,
+            timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            deleted_at TIMESTAMP WITH TIME ZONE
+        );
+    `).Error; err != nil {
+		return nil, fmt.Errorf("ошибка создания таблицы messages: %w", err)
+	}
 
-		createIndexes(db)
-		createFunctionsAndViews(db)
+	// Таблица sessions
+	if err := db.Exec(`
+        CREATE TABLE IF NOT EXISTS sessions (
+            id SERIAL PRIMARY KEY,
+            session_id VARCHAR(32) UNIQUE NOT NULL,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            deleted_at TIMESTAMP WITH TIME ZONE
+        );
+    `).Error; err != nil {
+		return nil, fmt.Errorf("ошибка создания таблицы sessions: %w", err)
+	}
+
+	log.Println("✅ Таблицы созданы")
+
+	// Создаем индексы
+	createIndexes(db)
+
+	// Создаем функции
+	createFunctions(db)
+
+	// Создаем представления
+	createViews(db)
+
+	// Создаем тестовые данные если нужно
+	if config.ResetDB {
 		createTestData(db)
-	} else {
-		log.Printf("✅ Найдено %d таблиц. Проверяем схему...", tableCount)
-
-		// Обновляем схему без потери данных
-		if err := db.AutoMigrate(&models.User{}, &models.Message{}, &models.Session{}); err != nil {
-			log.Printf("⚠️ Ошибка при обновлении схемы: %v", err)
-		}
-
-		// Обновляем индексы, функции и представления
-		createIndexes(db)
-		createFunctionsAndViews(db)
 	}
 
 	return db, nil
 }
 
-// isRunningInDocker проверяет, запущено ли приложение в Docker контейнере
-func isRunningInDocker() bool {
-	if _, err := os.Stat("/.dockerenv"); err == nil {
-		return true
-	}
-	return false
-}
-
 // createIndexes создает индексы
 func createIndexes(db *gorm.DB) {
-	log.Println("📊 Проверка индексов...")
+	log.Println("📊 Создание индексов...")
 
 	indexes := []string{
 		"CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)",
@@ -200,97 +182,117 @@ func createIndexes(db *gorm.DB) {
 
 	for _, idx := range indexes {
 		if err := db.Exec(idx).Error; err != nil {
-			log.Printf("⚠️ Ошибка создания индекса: %v", err)
+			log.Printf("⚠️ Ошибка создания индекса %s: %v", idx, err)
 		}
 	}
-	log.Println("✅ Индексы проверены")
+	log.Println("✅ Индексы созданы")
 }
 
-// createFunctionsAndViews создает функции и представления
-func createFunctionsAndViews(db *gorm.DB) {
-	log.Println("🔄 Проверка функций и представлений...")
+// createFunctions создает полезные функции
+func createFunctions(db *gorm.DB) {
+	log.Println("🔧 Создание функций...")
 
-	// Удаляем старые версии
-	db.Exec("DROP VIEW IF EXISTS active_users CASCADE")
-	db.Exec("DROP FUNCTION IF EXISTS get_recent_messages(INTEGER) CASCADE")
+	functionSQL := `
+    CREATE OR REPLACE FUNCTION get_recent_messages(limit_count INTEGER)
+    RETURNS TABLE (
+        message_id INTEGER,
+        username VARCHAR,
+        content TEXT,
+        message_time TIMESTAMP WITH TIME ZONE
+    ) AS $$
+    BEGIN
+        RETURN QUERY
+        SELECT 
+            m.id,
+            u.username,
+            m.content,
+            m.timestamp
+        FROM messages m
+        JOIN users u ON m.user_id = u.id
+        WHERE m.deleted_at IS NULL
+        ORDER BY m.timestamp DESC
+        LIMIT limit_count;
+    END;
+    $$ LANGUAGE plpgsql;`
 
-	// Создаем функцию get_recent_messages
-	db.Exec(`
-        CREATE OR REPLACE FUNCTION get_recent_messages(limit_count INTEGER)
-        RETURNS TABLE (
-            message_id INTEGER,
-            username VARCHAR,
-            content TEXT,
-            message_time TIMESTAMP WITH TIME ZONE
-        ) AS $$
-        BEGIN
-            RETURN QUERY
-            SELECT 
-                m.id,
-                u.username,
-                m.content,
-                m.timestamp
-            FROM messages m
-            JOIN users u ON m.user_id = u.id
-            WHERE m.deleted_at IS NULL
-            ORDER BY m.timestamp DESC
-            LIMIT limit_count;
-        END;
-        $$ LANGUAGE plpgsql;
-    `)
+	if err := db.Exec(functionSQL).Error; err != nil {
+		log.Printf("⚠️ Ошибка создания функции: %v", err)
+	}
 
-	// Создаем представление active_users
-	db.Exec(`
-        CREATE OR REPLACE VIEW active_users AS
-        SELECT DISTINCT u.id, u.username, u.last_seen
-        FROM users u
-        WHERE u.last_seen > NOW() - INTERVAL '5 minutes';
-    `)
+	log.Println("✅ Функции созданы")
+}
 
-	log.Println("✅ Функции и представления проверены")
+// createViews создает представления
+func createViews(db *gorm.DB) {
+	log.Println("👁️ Создание представлений...")
+
+	viewSQL := `
+    CREATE OR REPLACE VIEW active_users AS
+    SELECT DISTINCT u.id, u.username, u.last_seen
+    FROM users u
+    WHERE u.last_seen > NOW() - INTERVAL '5 minutes'
+    ORDER BY u.username;`
+
+	if err := db.Exec(viewSQL).Error; err != nil {
+		log.Printf("⚠️ Ошибка создания представления: %v", err)
+	}
+
+	log.Println("✅ Представления созданы")
 }
 
 // createTestData создает тестовые данные
 func createTestData(db *gorm.DB) {
-	log.Println("👤 Проверка наличия тестовых данных...")
+	log.Println("👤 Создание тестовых данных...")
 
-	var userCount int64
-	db.Model(&models.User{}).Count(&userCount)
+	// Проверяем, есть ли уже пользователи
+	var count int64
+	db.Raw("SELECT COUNT(*) FROM users").Scan(&count)
 
-	if userCount == 0 {
-		log.Println("📝 Создание тестовых пользователей...")
-
-		testUsers := []models.User{
-			{Username: "test", Password: "test"},
-			{Username: "admin", Password: "admin"},
+	if count == 0 {
+		// Тестовые пользователи
+		testUsers := []struct {
+			Username string
+			Password string
+		}{
+			{"test", "test"},
+			{"admin", "admin"},
 		}
 
 		for _, user := range testUsers {
-			db.Create(&user)
+			db.Exec("INSERT INTO users (username, password) VALUES (?, ?)",
+				user.Username, user.Password)
 		}
+		log.Println("✅ Тестовые пользователи созданы")
 
-		// Получаем созданных пользователей
-		var testUser, adminUser models.User
-		db.Where("username = ?", "test").First(&testUser)
-		db.Where("username = ?", "admin").First(&adminUser)
+		// Получаем ID пользователей
+		var testUserID, adminUserID int
+		db.Raw("SELECT id FROM users WHERE username = 'test'").Scan(&testUserID)
+		db.Raw("SELECT id FROM users WHERE username = 'admin'").Scan(&adminUserID)
 
-		// Создаем тестовые сообщения
-		if testUser.ID != 0 && adminUser.ID != 0 {
-			log.Println("💬 Создание тестовых сообщений...")
-
-			testMessages := []models.Message{
-				{UserID: testUser.ID, Content: "Добро пожаловать в PigeonGram! 🕊️", Timestamp: time.Now().Add(-5 * time.Minute)},
-				{UserID: adminUser.ID, Content: "База данных PostgreSQL готова к работе!", Timestamp: time.Now().Add(-4 * time.Minute)},
-				{UserID: testUser.ID, Content: "Теперь сообщения сохраняются надежно", Timestamp: time.Now().Add(-3 * time.Minute)},
-				{UserID: adminUser.ID, Content: "Данные сохраняются между перезапусками!", Timestamp: time.Now().Add(-2 * time.Minute)},
+		// Тестовые сообщения
+		if testUserID != 0 && adminUserID != 0 {
+			now := time.Now()
+			testMessages := []struct {
+				UserID    int
+				Content   string
+				Timestamp time.Time
+			}{
+				{testUserID, "Добро пожаловать в PigeonGram! 🕊️", now.Add(-5 * time.Minute)},
+				{adminUserID, "Redis интеграция готова!", now.Add(-4 * time.Minute)},
+				{testUserID, "Сообщения сохраняются в Redis", now.Add(-3 * time.Minute)},
+				{adminUserID, "Работает быстро и надежно", now.Add(-2 * time.Minute)},
+				{testUserID, "Следующий этап - Pub/Sub", now.Add(-1 * time.Minute)},
 			}
 
 			for _, msg := range testMessages {
-				db.Create(&msg)
+				db.Exec(`
+                    INSERT INTO messages (user_id, content, timestamp) 
+                    VALUES (?, ?, ?)`,
+					msg.UserID, msg.Content, msg.Timestamp)
 			}
 			log.Printf("✅ Создано %d тестовых сообщений", len(testMessages))
 		}
 	} else {
-		log.Printf("✅ Найдено %d пользователей", userCount)
+		log.Printf("✅ Найдено %d существующих пользователей", count)
 	}
 }

@@ -100,6 +100,16 @@ func (c *MemoryCache) AddMessage(ctx context.Context, message models.Message) er
 	c.messagesMu.Lock()
 	defer c.messagesMu.Unlock()
 
+	// Проверяем, не дубликат ли это сообщение
+	for _, msg := range c.messages {
+		if msg.Username == message.Username &&
+			msg.Text == message.Text &&
+			msg.Timestamp.Equal(message.Timestamp) {
+			log.Printf("⚠️ Попытка добавить дубликат сообщения от %s", message.Username)
+			return nil // игнорируем дубликаты
+		}
+	}
+
 	// Добавляем сообщение в конец (оно самое новое)
 	c.messages = append(c.messages, message)
 

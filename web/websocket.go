@@ -106,21 +106,12 @@ func sendMessageHistory(client *Client) error {
 		if err == nil && cached != nil {
 			cachedMessages = cached
 			log.Printf("📦 Загружено %d сообщений из КЭША для %s", len(cachedMessages), client.username)
-
-			// Убеждаемся, что сообщения отсортированы правильно (старые сначала)
-			for i := 0; i < len(cachedMessages)-1; i++ {
-				for j := i + 1; j < len(cachedMessages); j++ {
-					if cachedMessages[i].Timestamp.After(cachedMessages[j].Timestamp) {
-						cachedMessages[i], cachedMessages[j] = cachedMessages[j], cachedMessages[i]
-					}
-				}
-			}
 			messages = cachedMessages
 		}
 	}
 
 	// Если в кэше нет или там меньше сообщений, грузим из БД
-	if (len(messages) == 0 || len(messages) < 100) && msgRepo != nil {
+	if (len(messages) == 0) && msgRepo != nil {
 		recent, err := msgRepo.GetRecent(ctx, 100)
 		if err == nil {
 			// Конвертируем Entity в DTO
@@ -133,50 +124,22 @@ func sendMessageHistory(client *Client) error {
 				})
 			}
 
-			// Сортируем сообщения по возрастанию времени (старые сначала)
-			for i := 0; i < len(dbMessages)-1; i++ {
-				for j := i + 1; j < len(dbMessages); j++ {
-					if dbMessages[i].Timestamp.After(dbMessages[j].Timestamp) {
-						dbMessages[i], dbMessages[j] = dbMessages[j], dbMessages[i]
-					}
-				}
-			}
-
-			// Если были сообщения из кэша, объединяем
-			if len(messages) > 0 {
-				// Создаем мапу для уникальности по тексту+времени (простой способ)
-				seen := make(map[string]bool)
-				for _, msg := range messages {
-					key := msg.Username + msg.Text + msg.Timestamp.String()
-					seen[key] = true
-				}
-
-				// Добавляем новые сообщения из БД
-				for _, msg := range dbMessages {
-					key := msg.Username + msg.Text + msg.Timestamp.String()
-					if !seen[key] {
-						messages = append(messages, msg)
-					}
-				}
-
-				// Пересортировываем
-				for i := 0; i < len(messages)-1; i++ {
-					for j := i + 1; j < len(messages); j++ {
-						if messages[i].Timestamp.After(messages[j].Timestamp) {
-							messages[i], messages[j] = messages[j], messages[i]
-						}
-					}
-				}
-			} else {
-				messages = dbMessages
-			}
-
+			messages = dbMessages
 			log.Printf("📜 Загружено %d сообщений из БД для %s", len(dbMessages), client.username)
 
-			// Обновляем кэш (только если мы загрузили больше, чем было)
-			if messageCache != nil && len(messages) > len(cachedMessages) {
+			// Сохраняем в кэш
+			if messageCache != nil && len(messages) > 0 {
 				messageCache.SetRecentMessages(ctx, messages)
 				log.Printf("📦 Кэш обновлен из БД: теперь %d сообщений", len(messages))
+			}
+		}
+	}
+
+	// СОРТИРУЕМ сообщения по возрастанию времени (старые сначала) для правильного отображения
+	for i := 0; i < len(messages)-1; i++ {
+		for j := i + 1; j < len(messages); j++ {
+			if messages[i].Timestamp.After(messages[j].Timestamp) {
+				messages[i], messages[j] = messages[j], messages[i]
 			}
 		}
 	}
