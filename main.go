@@ -3,52 +3,92 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"math/rand"
 	"net/http"
-	"pigeongram/web"
+	"os"
 	"time"
 
+	"github.com/go-redis/redis/v8"
+
 	"pigeongram/config"
+	"pigeongram/internal/websocket"
 	"pigeongram/repository/cache"
 	"pigeongram/repository/postgres"
+	"pigeongram/web"
 )
 
 func main() {
 	// Флаги командной строки
 	resetDB := flag.Bool("reset-db", false, "Сбросить базу данных при запуске")
-	useRedis := flag.Bool("use-redis", true, "Использовать Redis для кэша")
+	useRedis := flag.Bool("use-redis", true, "Использовать Redis для кэша и Pub/Sub")
+	port := flag.Int("port", 8080, "Порт сервера")
+	serverID := flag.String("server-id", "", "ID сервера (если не указан, генерируется)")
 	flag.Parse()
 
-	// Инициализация генератора случайных чисел
 	rand.Seed(time.Now().UnixNano())
 
-	// 1. Инициализация PostgreSQL
-	log.Println("📦 Подключение к PostgreSQL...")
-	dbConfig := config.NewDefaultConfig()
-
-	// Переопределяем ResetDB из флага командной строки
-	if *resetDB {
-		dbConfig.ResetDB = true
-		log.Println("⚠️⚠️⚠️ РЕЖИМ СБРОСА БАЗЫ ДАННЫХ АКТИВИРОВАН (флаг -reset-db) ⚠️⚠️⚠️")
-	} else if dbConfig.ResetDB {
-		log.Println("⚠️⚠️⚠️ РЕЖИМ СБРОСА БАЗЫ ДАННЫХ АКТИВИРОВАН (переменная окружения) ⚠️⚠️⚠️")
+	// Генерируем ID сервера если не указан
+	if *serverID == "" {
+		hostname, _ := os.Hostname()
+		*serverID = fmt.Sprintf("%s-%d", hostname, time.Now().UnixNano())
 	}
 
+	log.Printf("🚀 Запуск сервера %s на порту %d", *serverID, *port)
+	log.Printf("📊 Режим: resetDB=%v, useRedis=%v", *resetDB, *useRedis)
+
+	// Инициализация конфигурации БД
+	dbConfig := config.NewDefaultConfig()
+	if *resetDB {
+		dbConfig.ResetDB = true
+		log.Println("⚠️ Режим сброса базы данных активирован")
+	}
+
+	// Инициализация PostgreSQL
+	log.Println("📦 Подключение к PostgreSQL...")
 	db, err := config.InitPostgres(dbConfig)
 	if err != nil {
 		log.Fatal("❌ Ошибка подключения к БД:", err)
 	}
 	log.Println("✅ PostgreSQL подключен успешно")
 
-	// Инициализация кэша (Redis или Memory)
-	var messageCache cache.Cache
+	// Инициализация Redis клиента
+	var redisClient *redis.Client
 	redisConfig := config.NewRedisConfigReader()
 
 	if *useRedis && redisConfig.IsEnabled() {
-		log.Println("🚀 Инициализация Redis кэша...")
-		host, port, password, db, ttl := redisConfig.Load()
+		host, port, password, db, _ := redisConfig.Load()
 
+		redisClient = redis.NewClient(&redis.Options{
+			Addr:         fmt.Sprintf("%s:%d", host, port),
+			Password:     password,
+			DB:           db,
+			DialTimeout:  5 * time.Second,
+			ReadTimeout:  3 * time.Second,
+			WriteTimeout: 3 * time.Second,
+			PoolSize:     10,
+			MinIdleConns: 2,
+		})
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		if err := redisClient.Ping(ctx).Err(); err != nil {
+			log.Printf("⚠️ Ошибка подключения к Redis: %v", err)
+			log.Println("⚠️ Redis будет отключен")
+			redisClient = nil
+		} else {
+			log.Println("✅ Redis подключен успешно")
+		}
+	} else {
+		log.Println("⚠️ Redis отключен (используется MemoryCache)")
+	}
+
+	// Инициализация кэша
+	var messageCache cache.Cache
+	if redisClient != nil {
+		host, port, password, db, ttl := redisConfig.Load()
 		redisCache, err := cache.NewRedisCache(cache.RedisConfig{
 			Host:     host,
 			Port:     port,
@@ -57,67 +97,82 @@ func main() {
 			TTL:      ttl,
 			Prefix:   redisConfig.GetCachePrefix(),
 		})
-
-		if err != nil {
-			log.Printf("⚠️ Ошибка подключения к Redis: %v", err)
-			log.Println("⚠️ Используем MemoryCache как запасной вариант")
-			messageCache = cache.NewMemoryCache(5 * time.Minute)
-		} else {
+		if err == nil {
 			messageCache = redisCache
 			log.Println("✅ Redis кэш инициализирован")
-
-			// Очистка при подключении (опционально)
-			if *resetDB {
-				ctx := context.Background()
-				redisCache.FlushAll(ctx)
-				log.Println("🧹 Redis кэш очищен")
-			}
+		} else {
+			log.Printf("⚠️ Ошибка инициализации Redis кэша: %v", err)
 		}
-	} else {
-		log.Println("🚀 Используем MemoryCache (в памяти)")
-		messageCache = cache.NewMemoryCache(5 * time.Minute)
 	}
 
-	// 3. Создаем репозитории
+	if messageCache == nil {
+		messageCache = cache.NewMemoryCache(5 * time.Minute)
+		log.Println("⚠️ Используется MemoryCache (в памяти)")
+	}
+
+	// Создаем репозитории
 	userRepo := postgres.NewUserRepository(db)
 	msgRepo := postgres.NewMessageRepository(db)
 	sessionRepo := postgres.NewSessionRepository(db)
 
-	// 4. Инициализируем хранилища в web пакете
-	web.InitStores(userRepo, msgRepo, sessionRepo, messageCache)
+	// Создаем WebSocket менеджер
+	wsManager := websocket.NewManager(
+		msgRepo,
+		userRepo,
+		messageCache,
+		redisClient,
+		*serverID,
+	)
 
-	// 5. Запускаем периодическую очистку сессий
-	go func() {
-		ticker := time.NewTicker(1 * time.Hour)
-		for range ticker.C {
-			ctx := context.Background()
-			if err := sessionRepo.Cleanup(ctx); err != nil {
-				log.Printf("❌ Ошибка очистки сессий: %v", err)
-			} else {
-				log.Println("🧹 Очистка истекших сессий выполнена")
-			}
+	// Регистрируем сервер в Redis (для кластера)
+	if redisClient != nil {
+		registry := websocket.NewServerRegistry(redisClient, *serverID)
+		ctx := context.Background()
+		if err := registry.Register(ctx); err != nil {
+			log.Printf("⚠️ Ошибка регистрации сервера: %v", err)
+		} else {
+			log.Println("✅ Сервер зарегистрирован в Redis кластере")
 		}
-	}()
+		defer func() {
+			ctx := context.Background()
+			if err := registry.Unregister(ctx); err != nil {
+				log.Printf("⚠️ Ошибка при дерегистрации сервера: %v", err)
+			}
+		}()
+	}
 
-	// 6. Запускаем WebSocket менеджер
-	web.InitWebSocket()
+	// Запускаем WebSocket менеджер
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go wsManager.Run(ctx)
 
-	// Настройка маршрутов
+	// Инициализируем хранилища в web пакете
+	web.InitStores(userRepo, msgRepo, sessionRepo, messageCache)
+	web.InitWebSocket(wsManager)
+
+	// Маршруты
 	http.HandleFunc("/", web.LoginPage)
 	http.HandleFunc("/login", web.LoginHandler)
 	http.HandleFunc("/register", web.RegisterPage)
 	http.HandleFunc("/register-handler", web.RegisterHandler)
 	http.HandleFunc("/chat", web.AuthMiddleware(web.ChatPage))
-	http.HandleFunc("/logout", web.LogoutHandler) // Новый маршрут для выхода
+	http.HandleFunc("/logout", web.LogoutHandler)
 	http.HandleFunc("/ws", web.AuthMiddleware(web.WebSocketHandler))
+	// Добавляем новые маршруты в main.go после существующих
+	http.HandleFunc("/debug/stats", web.DebugStatsHandler)
+	http.HandleFunc("/health", web.HealthCheckHandler)
+	http.HandleFunc("/metrics", web.MetricsHandler)
 
 	// Статические файлы
 	fs := http.FileServer(http.Dir("web/static"))
 	http.Handle("/static/", http.StripPrefix("/static/", fs))
 
-	log.Println("Сервер запущен на http://localhost:8080")
-	log.Println("📊 База данных: PostgreSQL")
-	log.Printf("📊 Кэш: %v", map[bool]string{true: "Redis", false: "Memory"}[*useRedis && redisConfig.IsEnabled()])
-	log.Println("Тестовые учетные записи: test/test, admin/admin")
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	// Запускаем сервер
+	serverAddr := fmt.Sprintf(":%d", *port)
+	log.Printf("🕊️ PigeonGram сервер %s запущен на http://localhost%s", *serverID, serverAddr)
+	log.Printf("📊 Статистика: http://localhost%s/debug/stats", serverAddr)
+
+	if err := http.ListenAndServe(serverAddr, nil); err != nil {
+		log.Fatal("❌ Ошибка запуска сервера:", err)
+	}
 }
