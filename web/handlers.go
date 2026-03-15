@@ -98,11 +98,10 @@ func ChatPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data := map[string]interface{}{
-		"Username": username,
-	}
+	log.Printf("👤 [CHAT] Пользователь %s открывает чат", username)
 
-	renderTemplate(w, "chat.html", data)
+	// 👈 ВАЖНО: передаем просто строку, не map
+	renderTemplate(w, "chat.html", username)
 }
 
 // LoginHandler - обрабатывает вход
