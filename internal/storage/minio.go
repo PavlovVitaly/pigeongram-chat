@@ -102,24 +102,24 @@ func (m *MinIOClient) GenerateUploadURL(ctx context.Context, chatID, userID, fil
 
 // GenerateDownloadURL создает временную ссылку для скачивания
 func (m *MinIOClient) GenerateDownloadURL(ctx context.Context, chatID, objectKey string) (string, error) {
-	// Временно отключаем проверку для отладки
-	// expectedPrefix := fmt.Sprintf("chat-%s/", chatID)
-	// if !strings.HasPrefix(objectKey, expectedPrefix) {
-	//     return "", fmt.Errorf("доступ запрещен: файл не принадлежит чату")
-	// }
+	log.Printf("🔍 [MinIO] Генерация ссылки на скачивание для файла: %s (чат: %s)", objectKey, chatID)
 
-	log.Printf("🔍 [MinIO] Генерация ссылки на скачивание: key=%s", objectKey)
+	// Проверяем, что файл принадлежит чату (но не проверяем пользователя)
+	expectedPrefix := fmt.Sprintf("chat-%s/", chatID)
+	if !strings.HasPrefix(objectKey, expectedPrefix) {
+		return "", fmt.Errorf("доступ запрещен: файл не принадлежит чату %s", chatID)
+	}
 
 	reqParams := make(url.Values)
 	reqParams.Set("response-content-disposition", "attachment")
 
 	presignedURL, err := m.client.PresignedGetObject(ctx, m.bucketName, objectKey, m.downloadExpiry, reqParams)
 	if err != nil {
-		log.Printf("❌ [MinIO] Ошибка генерации ссылки: %v", err)
+		log.Printf("❌ [MinIO] Ошибка генерации ссылки на скачивание: %v", err)
 		return "", fmt.Errorf("ошибка создания presigned URL: %w", err)
 	}
 
-	log.Printf("✅ [MinIO] Ссылка сгенерирована: %s", presignedURL.String())
+	log.Printf("✅ [MinIO] Ссылка на скачивание сгенерирована для файла %s", objectKey)
 	return presignedURL.String(), nil
 }
 
@@ -169,14 +169,39 @@ func (m *MinIOClient) ListFiles(ctx context.Context, chatID string) ([]FileInfo,
 }
 
 // DeleteFile удаляет файл
-func (m *MinIOClient) DeleteFile(ctx context.Context, chatID, objectKey string) error {
-	// Проверяем права доступа
+func (m *MinIOClient) DeleteFile(ctx context.Context, chatID, objectKey, username string) error {
+	log.Printf("🔍 [MinIO] Попытка удаления файла: %s (чат: %s, пользователь: %s)", objectKey, chatID, username)
+
+	// Проверяем, что файл принадлежит чату
 	expectedPrefix := fmt.Sprintf("chat-%s/", chatID)
 	if !strings.HasPrefix(objectKey, expectedPrefix) {
-		return fmt.Errorf("доступ запрещен: файл не принадлежит чату")
+		return fmt.Errorf("доступ запрещен: файл не принадлежит чату %s", chatID)
 	}
 
-	return m.client.RemoveObject(ctx, m.bucketName, objectKey, minio.RemoveObjectOptions{})
+	// Проверяем, что пользователь является владельцем файла
+	// Формат ключа: chat-{chatID}/{username}/{timestamp}-{filename}
+	parts := strings.Split(objectKey, "/")
+	if len(parts) < 2 {
+		return fmt.Errorf("некорректный формат ключа файла")
+	}
+
+	fileOwner := parts[1] // второй элемент - имя пользователя
+	if fileOwner != username {
+		log.Printf("⛔ Попытка удаления файла другим пользователем: владелец=%s, запросил=%s",
+			fileOwner, username)
+		return fmt.Errorf("доступ запрещен: только владелец может удалить файл")
+	}
+
+	log.Printf("✅ Права подтверждены: пользователь %s является владельцем файла", username)
+
+	err := m.client.RemoveObject(ctx, m.bucketName, objectKey, minio.RemoveObjectOptions{})
+	if err != nil {
+		log.Printf("❌ [MinIO] Ошибка удаления файла: %v", err)
+		return fmt.Errorf("ошибка удаления файла: %w", err)
+	}
+
+	log.Printf("✅ [MinIO] Файл успешно удален: %s", objectKey)
+	return nil
 }
 
 // GetFileInfo получает информацию о файле

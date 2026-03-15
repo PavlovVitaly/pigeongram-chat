@@ -142,6 +142,7 @@ func (h *FileHandler) UploadComplete(w http.ResponseWriter, r *http.Request) {
 			ChatID:    req.ChatID,
 			File:      fileInfo,
 			Username:  username,
+			Owner:     username,
 			Timestamp: time.Now(),
 		}
 
@@ -207,8 +208,12 @@ func (h *FileHandler) GetDownloadURL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	log.Printf("📥 [DOWNLOAD] Запрос на скачивание: чат=%s, файл=%s, пользователь=%s",
+		chatID, objectKey, username)
+
 	url, err := h.storage.GenerateDownloadURL(r.Context(), chatID, objectKey)
 	if err != nil {
+		log.Printf("❌ [DOWNLOAD] Ошибка: %v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -237,9 +242,20 @@ func (h *FileHandler) DeleteFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err := h.storage.DeleteFile(r.Context(), req.ChatID, req.Key)
+	log.Printf("🗑️ [DELETE] Запрос на удаление: чат=%s, файл=%s, пользователь=%s",
+		req.ChatID, req.Key, username)
+
+	// Передаем username для проверки прав
+	err := h.storage.DeleteFile(r.Context(), req.ChatID, req.Key, username)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		log.Printf("❌ [DELETE] Ошибка: %v", err)
+
+		// Возвращаем понятную ошибку
+		if strings.Contains(err.Error(), "только владелец") {
+			http.Error(w, "Вы можете удалять только свои файлы", http.StatusForbidden)
+		} else {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
 		return
 	}
 
@@ -253,12 +269,17 @@ func (h *FileHandler) DeleteFile(w http.ResponseWriter, r *http.Request) {
 			Timestamp: time.Now(),
 		}
 
-		h.wsManager.FileEvents <- event
-		log.Printf("🗑️ Событие об удалении файла отправлено: %s удалил файл", username)
+		select {
+		case h.wsManager.FileEvents <- event:
+			log.Printf("📤 [DELETE] Событие об удалении отправлено в WebSocket")
+		default:
+			log.Printf("⚠️ [DELETE] Канал файловых событий переполнен")
+		}
 	}
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{
-		"status": "ok",
+		"status":  "ok",
+		"message": "Файл удален",
 	})
 }

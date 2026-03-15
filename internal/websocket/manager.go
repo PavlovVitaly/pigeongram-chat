@@ -24,8 +24,9 @@ const (
 type FileEventData struct {
 	EventType string      `json:"eventType"` // "upload" или "delete"
 	ChatID    string      `json:"chatId"`
-	File      interface{} `json:"file"` // информация о файле
+	File      interface{} `json:"file"`
 	Username  string      `json:"username"`
+	Owner     string      `json:"owner"` // владелец файла (для upload)
 	Timestamp time.Time   `json:"timestamp"`
 }
 

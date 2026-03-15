@@ -394,6 +394,7 @@
             }
         }
         
+        // В функции createFileElement, изменим отображение кнопки удаления
         function createFileElement(file) {
             const div = document.createElement('div');
             div.className = 'file-item';
@@ -411,18 +412,32 @@
             else if (file.name.match(/\.(xls|xlsx)$/i)) icon = '📊';
             else if (file.name.match(/\.(zip|rar|7z|tar|gz)$/i)) icon = '🗜️';
             
+            // Проверяем, является ли текущий пользователь владельцем файла
+            const isOwner = (file.uploaderId === username);
+            
+            // Формируем кнопки
+            const downloadButton = `<button onclick="downloadFile('${escapeHtml(file.key)}')" class="btn-small btn-success">Скачать</button>`;
+            
+            // Кнопка удаления только для владельца
+            const deleteButton = isOwner 
+                ? `<button onclick="deleteFile('${escapeHtml(file.key)}', '${escapeHtml(file.name)}')" class="btn-small btn-danger">Удалить</button>`
+                : '';
+            
+            // Добавляем индикатор владельца
+            const ownerIndicator = isOwner ? ' (вы)' : '';
+            
             div.innerHTML = `
                 <div class="file-info">
                     <span class="file-name">${icon} ${escapeHtml(file.name)}</span>
                     <span class="file-meta">
-                        Загрузил: ${escapeHtml(file.uploaderId)} | 
+                        Загрузил: ${escapeHtml(file.uploaderId)}${ownerIndicator} | 
                         Размер: ${size} KB | 
                         Дата: ${escapeHtml(date)}
                     </span>
                 </div>
                 <div class="file-actions">
-                    <button onclick="downloadFile('${escapeHtml(file.key)}')" class="btn-small btn-success">Скачать</button>
-                    <button onclick="deleteFile('${escapeHtml(file.key)}', '${escapeHtml(file.name)}')" class="btn-small btn-danger">Удалить</button>
+                    ${downloadButton}
+                    ${deleteButton}
                 </div>
             `;
             
@@ -539,15 +554,15 @@
                             // Получаем Location из заголовков ответа MinIO
                             const location = xhr.getResponseHeader('Location');
                             let objectKey = '';
-                            
+
                             if (location) {
                                 console.log('📍 Location из MinIO:', location);
-                                
+
                                 // MinIO возвращает: /bucket-name/object-key
                                 // Убираем начальный слеш и имя bucket
                                 const parts = location.split('/');
                                 // parts: ["", "bucket-name", "chat-general", "user", "timestamp-filename"]
-                                
+
                                 // Пропускаем пустой первый элемент и имя bucket
                                 if (parts.length >= 3) {
                                     // Берем все после bucket-name
@@ -555,7 +570,7 @@
                                 } else {
                                     objectKey = parts.join('/');
                                 }
-                                
+
                                 console.log('🔑 Извлеченный ключ:', objectKey);
                             } else {
                                 // Если нет Location, формируем ключ сами
@@ -563,11 +578,11 @@
                                 objectKey = `chat-${chatId}/${username}/${timestamp}-${file.name}`;
                                 console.log('🔑 Сформированный ключ (нет Location):', objectKey);
                             }
-                            
+
                             // Уведомляем сервер о завершении загрузки
                             try {
                                 console.log('📤 Отправка уведомления на сервер с ключом:', objectKey);
-                                
+
                                 const notifyResponse = await fetch('/api/files/upload-complete', {
                                     method: 'POST',
                                     headers: {'Content-Type': 'application/json'},
@@ -577,21 +592,21 @@
                                         key: objectKey
                                     })
                                 });
-                                
+
                                 if (!notifyResponse.ok) {
                                     const errorText = await notifyResponse.text();
                                     throw new Error(errorText || 'Ошибка уведомления');
                                 }
-                                
+
                                 const result = await notifyResponse.json();
                                 console.log('✅ Уведомление отправлено успешно:', result);
                                 showToast('✅ Файл успешно загружен!', 'success');
-                                
+
                             } catch (err) {
                                 console.error('❌ Ошибка уведомления:', err);
                                 showToast('⚠️ Файл загружен, но уведомление не отправлено', 'warning');
                             }
-                            
+
                             resolve();
                         } else {
                             console.error('❌ Ошибка загрузки, статус:', xhr.status);
