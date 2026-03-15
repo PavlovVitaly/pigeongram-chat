@@ -23,6 +23,11 @@
             box-shadow: 0 2px 5px rgba(0,0,0,0.1);
         }
         
+        .file-header h2 {
+            color: #333;
+            font-size: 1.8rem;
+        }
+        
         .upload-section {
             background: white;
             padding: 20px;
@@ -47,6 +52,11 @@
             padding: 10px;
             border: 1px solid #ddd;
             border-radius: 5px;
+            font-size: 0.95rem;
+        }
+        
+        .upload-section input[type=file]:hover {
+            border-color: #667eea;
         }
         
         .progress {
@@ -118,13 +128,40 @@
             gap: 10px;
         }
         
-        .btn-small {
-            padding: 5px 15px;
+        /* Единый стиль для всех кнопок */
+        .btn {
+            padding: 0.5rem 1.2rem;
             border: none;
-            border-radius: 5px;
+            border-radius: 8px;
+            font-size: 0.95rem;
+            font-weight: 500;
             cursor: pointer;
-            font-size: 0.9em;
-            transition: all 0.2s;
+            transition: all 0.2s ease;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            min-width: 80px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+        }
+        
+        .btn:active {
+            transform: translateY(0);
+            box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: linear-gradient(135deg, #5a67d8, #6b46a0);
         }
         
         .btn-success {
@@ -143,6 +180,10 @@
         
         .btn-danger:hover {
             background: #c82333;
+        }
+        
+        .btn-icon {
+            font-size: 1.1rem;
         }
         
         .empty-state {
@@ -168,6 +209,11 @@
         .empty-state p {
             color: #999;
             margin-bottom: 20px;
+        }
+        
+        .empty-state .btn {
+            display: inline-flex;
+            padding: 0.7rem 2rem;
         }
         
         .loading {
@@ -252,6 +298,16 @@
         .file-exit {
             animation: slideIn 0.3s ease reverse;
         }
+        
+        .user-info {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+        
+        .user-info strong {
+            color: #667eea;
+        }
     </style>
 </head>
 <body>
@@ -260,7 +316,10 @@
             <h2>📁 Хранилище файлов</h2>
             <div class="user-info">
                 <span>Вы: <strong id="username">{{.Username}}</strong></span>
-                <button onclick="goToChat()" class="btn-small btn-success">← Вернуться в чат</button>
+                <button onclick="goToChat()" class="btn btn-primary">
+                    <span class="btn-icon">←</span>
+                    Вернуться в чат
+                </button>
             </div>
         </div>
         
@@ -268,7 +327,10 @@
             <h3>📤 Загрузить файл</h3>
             <form id="uploadForm">
                 <input type="file" id="fileInput" required>
-                <button type="submit" class="btn-small btn-success">Загрузить</button>
+                <button type="submit" class="btn btn-success">
+                    <span class="btn-icon">📤</span>
+                    Загрузить
+                </button>
             </form>
             <div id="uploadProgress" class="progress" style="display:none">
                 <div class="progress-bar" id="progressBar" style="width:0%">0%</div>
@@ -298,30 +360,37 @@
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
             const wsUrl = `${protocol}//${window.location.host}/ws`;
             
+            console.log('🔌 [CLIENT] Подключение к WebSocket:', wsUrl);
             fileSocket = new WebSocket(wsUrl);
             
             fileSocket.onopen = function() {
-                console.log('🔌 WebSocket для файлов подключен');
+                console.log('✅ [CLIENT] WebSocket подключен успешно');
                 reconnectAttempts = 0;
                 showToast('🟢 Подключено к серверу', 'success');
             };
             
             fileSocket.onmessage = function(event) {
-                const data = JSON.parse(event.data);
+                console.log('📨 [CLIENT] ПОЛУЧЕНО сообщение от сервера:', event.data);
                 
-                // Проверяем, что это событие с файлами
-                if (data.type === 'file') {
-                    handleFileEvent(data.data);
+                try {
+                    const data = JSON.parse(event.data);
+                    
+                    if (data.type === 'file') {
+                        console.log('📁 [CLIENT] Это файловое событие!');
+                        handleFileEvent(data.data);
+                    }
+                } catch (e) {
+                    console.error('❌ [CLIENT] Ошибка парсинга JSON:', e);
                 }
             };
             
-            fileSocket.onclose = function() {
-                console.log('🔌 WebSocket для файлов отключен');
+            fileSocket.onclose = function(event) {
+                console.log('🔌 [CLIENT] WebSocket закрыт. Код:', event.code);
                 
                 if (reconnectAttempts < maxReconnectAttempts) {
                     reconnectAttempts++;
                     const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
-                    console.log(`🔄 Переподключение через ${delay/1000}с... (попытка ${reconnectAttempts}/${maxReconnectAttempts})`);
+                    console.log(`🔄 [CLIENT] Переподключение через ${delay/1000}с...`);
                     setTimeout(connectFileWebSocket, delay);
                 } else {
                     showToast('❌ Потеряно соединение с сервером', 'error');
@@ -329,28 +398,25 @@
             };
             
             fileSocket.onerror = function(error) {
-                console.error('❌ Ошибка WebSocket:', error);
+                console.error('❌ [CLIENT] Ошибка WebSocket:', error);
             };
         }
         
         // ==================== Обработка событий ====================
         function handleFileEvent(event) {
-            console.log('📁 Файловое событие:', event);
+            console.log('📁 [CLIENT] Обработка файлового события:', event);
             
-            // Обновляем список файлов только если событие в нашем чате
             if (event.chatId === chatId) {
-                // Показываем уведомление
                 if (event.eventType === 'upload') {
+                    console.log('📤 [CLIENT] Загрузка файла:', event.file);
                     showToast(`📤 ${event.username} загрузил файл: ${event.file.name}`, 'info');
-                    // Добавляем файл в список без перезагрузки
                     addFileToList(event.file);
                 } else if (event.eventType === 'delete') {
+                    console.log('🗑️ [CLIENT] Удаление файла с ключом:', event.file.key);
                     showToast(`🗑️ ${event.username} удалил файл`, 'info');
-                    // Удаляем файл из списка без перезагрузки
                     removeFileFromList(event.file.key);
                 }
                 
-                // Обновляем полный список для синхронизации
                 setTimeout(loadFiles, 500);
             }
         }
@@ -359,15 +425,11 @@
         function addFileToList(file) {
             const container = document.getElementById('fileList');
             
-            // Убираем empty state если он есть
             if (container.querySelector('.empty-state')) {
                 container.innerHTML = '';
             }
             
-            // Создаем элемент файла
             const fileEl = createFileElement(file);
-            
-            // Добавляем в начало списка с анимацией
             fileEl.classList.add('file-enter');
             container.insertBefore(fileEl, container.firstChild);
             
@@ -384,7 +446,6 @@
                     el.classList.add('file-exit');
                     setTimeout(() => {
                         el.remove();
-                        // Если файлов больше нет, показываем empty state
                         if (container.children.length === 0) {
                             showEmptyState();
                         }
@@ -394,7 +455,6 @@
             }
         }
         
-        // В функции createFileElement, изменим отображение кнопки удаления
         function createFileElement(file) {
             const div = document.createElement('div');
             div.className = 'file-item';
@@ -402,7 +462,6 @@
             const size = (file.size / 1024).toFixed(1);
             const date = new Date(file.uploadedAt).toLocaleString('ru-RU');
             
-            // Определяем иконку по типу файла
             let icon = '📄';
             if (file.name.match(/\.(jpg|jpeg|png|gif|bmp|svg)$/i)) icon = '🖼️';
             else if (file.name.match(/\.(mp4|avi|mov|wmv|flv|mkv)$/i)) icon = '🎥';
@@ -412,19 +471,18 @@
             else if (file.name.match(/\.(xls|xlsx)$/i)) icon = '📊';
             else if (file.name.match(/\.(zip|rar|7z|tar|gz)$/i)) icon = '🗜️';
             
-            // Проверяем, является ли текущий пользователь владельцем файла
             const isOwner = (file.uploaderId === username);
-            
-            // Формируем кнопки
-            const downloadButton = `<button onclick="downloadFile('${escapeHtml(file.key)}')" class="btn-small btn-success">Скачать</button>`;
-            
-            // Кнопка удаления только для владельца
-            const deleteButton = isOwner 
-                ? `<button onclick="deleteFile('${escapeHtml(file.key)}', '${escapeHtml(file.name)}')" class="btn-small btn-danger">Удалить</button>`
-                : '';
-            
-            // Добавляем индикатор владельца
             const ownerIndicator = isOwner ? ' (вы)' : '';
+            
+            const downloadButton = `<button onclick="downloadFile('${escapeHtml(file.key)}')" class="btn btn-success">
+                <span class="btn-icon">⬇️</span> Скачать
+            </button>`;
+            
+            const deleteButton = isOwner 
+                ? `<button onclick="deleteFile('${escapeHtml(file.key)}', '${escapeHtml(file.name)}')" class="btn btn-danger">
+                    <span class="btn-icon">🗑️</span> Удалить
+                  </button>`
+                : '';
             
             div.innerHTML = `
                 <div class="file-info">
@@ -451,8 +509,8 @@
                     <div class="icon">📭</div>
                     <h3>Здесь пока ничего нет</h3>
                     <p>Загрузите первый файл, чтобы он появился в этом списке</p>
-                    <button onclick="document.getElementById('fileInput').click()" class="btn-small btn-success">
-                        📤 Загрузить файл
+                    <button onclick="document.getElementById('fileInput').click()" class="btn btn-success">
+                        <span class="btn-icon">📤</span> Загрузить файл
                     </button>
                 </div>
             `;
@@ -484,7 +542,7 @@
                         <div class="icon">❌</div>
                         <h3>Ошибка загрузки</h3>
                         <p>${escapeHtml(err.message)}</p>
-                        <button onclick="loadFiles()" class="btn-small btn-success">Повторить</button>
+                        <button onclick="loadFiles()" class="btn btn-primary">Повторить</button>
                     </div>
                 `;
             }
@@ -498,14 +556,12 @@
             const file = fileInput.files[0];
             if (!file) return;
             
-            // Проверка размера (100 MB)
             const maxSize = 100 * 1024 * 1024;
             if (file.size > maxSize) {
                 showToast('❌ Файл слишком большой (макс. 100 MB)', 'error');
                 return;
             }
             
-            // Показываем прогресс
             const progress = document.getElementById('uploadProgress');
             const progressBar = document.getElementById('progressBar');
             progress.style.display = 'block';
@@ -513,7 +569,6 @@
             progressBar.textContent = '0%';
             
             try {
-                // 1. Получаем URL для загрузки
                 showToast('🔄 Получение ссылки для загрузки...', 'info');
                 
                 const urlResponse = await fetch(
@@ -527,14 +582,12 @@
                 
                 const { upload_url, form_data } = await urlResponse.json();
                 
-                // 2. Создаем FormData для загрузки
                 const formData = new FormData();
                 for (const [key, value] of Object.entries(form_data)) {
                     formData.append(key, value);
                 }
                 formData.append('file', file);
                 
-                // 3. Загружаем с прогрессом
                 const xhr = new XMLHttpRequest();
                 
                 await new Promise((resolve, reject) => {
@@ -548,41 +601,27 @@
                         }
                     };
                     
-                    // В функции uploadFile, при получении ответа от MinIO
                     xhr.onload = async () => {
                         if (xhr.status === 204) {
-                            // Получаем Location из заголовков ответа MinIO
                             const location = xhr.getResponseHeader('Location');
                             let objectKey = '';
-
+                            
                             if (location) {
                                 console.log('📍 Location из MinIO:', location);
-
-                                // MinIO возвращает: /bucket-name/object-key
-                                // Убираем начальный слеш и имя bucket
                                 const parts = location.split('/');
-                                // parts: ["", "bucket-name", "chat-general", "user", "timestamp-filename"]
-
-                                // Пропускаем пустой первый элемент и имя bucket
                                 if (parts.length >= 3) {
-                                    // Берем все после bucket-name
                                     objectKey = parts.slice(2).join('/');
                                 } else {
                                     objectKey = parts.join('/');
                                 }
-
                                 console.log('🔑 Извлеченный ключ:', objectKey);
                             } else {
-                                // Если нет Location, формируем ключ сами
                                 const timestamp = Date.now();
                                 objectKey = `chat-${chatId}/${username}/${timestamp}-${file.name}`;
-                                console.log('🔑 Сформированный ключ (нет Location):', objectKey);
+                                console.log('🔑 Сформированный ключ:', objectKey);
                             }
-
-                            // Уведомляем сервер о завершении загрузки
+                            
                             try {
-                                console.log('📤 Отправка уведомления на сервер с ключом:', objectKey);
-
                                 const notifyResponse = await fetch('/api/files/upload-complete', {
                                     method: 'POST',
                                     headers: {'Content-Type': 'application/json'},
@@ -592,24 +631,22 @@
                                         key: objectKey
                                     })
                                 });
-
+                                
                                 if (!notifyResponse.ok) {
                                     const errorText = await notifyResponse.text();
                                     throw new Error(errorText || 'Ошибка уведомления');
                                 }
-
-                                const result = await notifyResponse.json();
-                                console.log('✅ Уведомление отправлено успешно:', result);
+                                
+                                console.log('✅ Уведомление отправлено успешно');
                                 showToast('✅ Файл успешно загружен!', 'success');
-
+                                
                             } catch (err) {
                                 console.error('❌ Ошибка уведомления:', err);
                                 showToast('⚠️ Файл загружен, но уведомление не отправлено', 'warning');
                             }
-
+                            
                             resolve();
                         } else {
-                            console.error('❌ Ошибка загрузки, статус:', xhr.status);
                             reject(new Error('Ошибка загрузки'));
                         }
                     };
@@ -618,10 +655,7 @@
                     xhr.send(formData);
                 });
                 
-                // Очищаем input
                 fileInput.value = '';
-                
-                // Обновляем список
                 await loadFiles();
                 
             } catch (err) {
@@ -661,7 +695,15 @@
                     body: JSON.stringify({ chat_id: chatId, key: key })
                 });
                 
-                if (!response.ok) throw new Error('Ошибка удаления');
+                if (!response.ok) {
+                    const error = await response.text();
+                    if (response.status === 403) {
+                        showToast('⛔ Вы можете удалять только свои файлы', 'error');
+                    } else {
+                        throw new Error(error || 'Ошибка удаления');
+                    }
+                    return;
+                }
                 
                 showToast('✅ Файл удален', 'success');
                 await loadFiles();
@@ -698,14 +740,9 @@
         
         // ==================== Инициализация ====================
         document.getElementById('uploadForm').addEventListener('submit', uploadFile);
-        
-        // Загружаем список при открытии
         loadFiles();
-        
-        // Подключаем WebSocket
         connectFileWebSocket();
         
-        // Очищаем старые уведомления при закрытии страницы
         window.addEventListener('beforeunload', function() {
             if (fileSocket) {
                 fileSocket.close();
