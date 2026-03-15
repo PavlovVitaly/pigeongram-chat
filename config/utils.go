@@ -24,6 +24,16 @@ func GetEnvAsInt(key string, defaultValue int) int {
 	return defaultValue
 }
 
+// GetEnvAsInt64 возвращает значение переменной окружения как int64
+func GetEnvAsInt64(key string, defaultValue int64) int64 {
+	if value := os.Getenv(key); value != "" {
+		if intVal, err := strconv.ParseInt(value, 10, 64); err == nil {
+			return intVal
+		}
+	}
+	return defaultValue
+}
+
 // GetEnvAsBool возвращает значение переменной окружения как bool
 func GetEnvAsBool(key string, defaultValue bool) bool {
 	if value := os.Getenv(key); value != "" {
@@ -40,4 +50,8 @@ func GetEnvAsDuration(key string, defaultValue time.Duration) time.Duration {
 		}
 	}
 	return defaultValue
+}
+
+func GetServerEnvironment() string {
+	return GetEnv("SERVER_ENVIRONMENT", "development")
 }

@@ -1,0 +1,701 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PigeonGram - Хранилище файлов</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <style>
+        .file-container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        .file-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+            padding: 20px;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        
+        .upload-section {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 30px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        
+        .upload-section h3 {
+            margin-bottom: 15px;
+            color: #333;
+        }
+        
+        .upload-section form {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        
+        .upload-section input[type=file] {
+            flex: 1;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        
+        .progress {
+            margin-top: 15px;
+            height: 20px;
+            background: #f0f0f0;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+        
+        .progress-bar {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea, #764ba2);
+            color: white;
+            text-align: center;
+            line-height: 20px;
+            font-size: 12px;
+            transition: width 0.3s;
+        }
+        
+        .files-section {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        
+        .files-section h3 {
+            margin-bottom: 20px;
+            color: #333;
+        }
+        
+        .file-list {
+            min-height: 200px;
+        }
+        
+        .file-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px;
+            border-bottom: 1px solid #eee;
+            transition: background 0.2s;
+            animation: slideIn 0.3s ease;
+        }
+        
+        .file-item:hover {
+            background: #f8f9fa;
+        }
+        
+        .file-info {
+            flex: 1;
+        }
+        
+        .file-name {
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 5px;
+            display: block;
+        }
+        
+        .file-meta {
+            font-size: 0.85em;
+            color: #666;
+        }
+        
+        .file-actions {
+            display: flex;
+            gap: 10px;
+        }
+        
+        .btn-small {
+            padding: 5px 15px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 0.9em;
+            transition: all 0.2s;
+        }
+        
+        .btn-success {
+            background: #28a745;
+            color: white;
+        }
+        
+        .btn-success:hover {
+            background: #218838;
+        }
+        
+        .btn-danger {
+            background: #dc3545;
+            color: white;
+        }
+        
+        .btn-danger:hover {
+            background: #c82333;
+        }
+        
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            background: #f9f9f9;
+            border-radius: 10px;
+            color: #666;
+            animation: fadeIn 0.5s ease;
+        }
+        
+        .empty-state .icon {
+            font-size: 64px;
+            margin-bottom: 20px;
+            opacity: 0.7;
+        }
+        
+        .empty-state h3 {
+            color: #333;
+            margin-bottom: 10px;
+        }
+        
+        .empty-state p {
+            color: #999;
+            margin-bottom: 20px;
+        }
+        
+        .loading {
+            text-align: center;
+            color: #667eea;
+            padding: 40px;
+        }
+        
+        .toast {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 12px 24px;
+            border-radius: 8px;
+            color: white;
+            font-weight: 500;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            z-index: 1000;
+            animation: slideInRight 0.3s ease;
+        }
+        
+        .toast.success {
+            background: linear-gradient(135deg, #28a745, #20c997);
+        }
+        
+        .toast.error {
+            background: linear-gradient(135deg, #dc3545, #c82333);
+        }
+        
+        .toast.info {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+        }
+        
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        @keyframes slideInRight {
+            from {
+                opacity: 0;
+                transform: translateX(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        .loading::after {
+            content: '';
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            margin-left: 10px;
+            border: 2px solid #667eea;
+            border-top-color: transparent;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            vertical-align: middle;
+        }
+        
+        .file-enter {
+            animation: slideIn 0.3s ease;
+        }
+        
+        .file-exit {
+            animation: slideIn 0.3s ease reverse;
+        }
+    </style>
+</head>
+<body>
+    <div class="file-container">
+        <div class="file-header">
+            <h2>📁 Хранилище файлов</h2>
+            <div class="user-info">
+                <span>Вы: <strong id="username">{{.Username}}</strong></span>
+                <button onclick="goToChat()" class="btn-small btn-success">← Вернуться в чат</button>
+            </div>
+        </div>
+        
+        <div class="upload-section">
+            <h3>📤 Загрузить файл</h3>
+            <form id="uploadForm">
+                <input type="file" id="fileInput" required>
+                <button type="submit" class="btn-small btn-success">Загрузить</button>
+            </form>
+            <div id="uploadProgress" class="progress" style="display:none">
+                <div class="progress-bar" id="progressBar" style="width:0%">0%</div>
+            </div>
+            <div id="uploadStatus" class="upload-status" style="display:none"></div>
+        </div>
+        
+        <div class="files-section">
+            <h3>📄 Файлы в чате</h3>
+            <div id="fileList" class="file-list">
+                <div class="loading">Загрузка файлов...</div>
+            </div>
+        </div>
+    </div>
+
+    <div id="toastContainer" style="position: fixed; top: 20px; right: 20px; z-index: 1000;"></div>
+
+    <script>
+        const chatId = '{{.ChatID}}';
+        const username = document.getElementById('username').textContent;
+        let fileSocket = null;
+        let reconnectAttempts = 0;
+        const maxReconnectAttempts = 5;
+        
+        // ==================== WebSocket соединение ====================
+        function connectFileWebSocket() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/ws`;
+            
+            fileSocket = new WebSocket(wsUrl);
+            
+            fileSocket.onopen = function() {
+                console.log('🔌 WebSocket для файлов подключен');
+                reconnectAttempts = 0;
+                showToast('🟢 Подключено к серверу', 'success');
+            };
+            
+            fileSocket.onmessage = function(event) {
+                const data = JSON.parse(event.data);
+                
+                // Проверяем, что это событие с файлами
+                if (data.type === 'file') {
+                    handleFileEvent(data.data);
+                }
+            };
+            
+            fileSocket.onclose = function() {
+                console.log('🔌 WebSocket для файлов отключен');
+                
+                if (reconnectAttempts < maxReconnectAttempts) {
+                    reconnectAttempts++;
+                    const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
+                    console.log(`🔄 Переподключение через ${delay/1000}с... (попытка ${reconnectAttempts}/${maxReconnectAttempts})`);
+                    setTimeout(connectFileWebSocket, delay);
+                } else {
+                    showToast('❌ Потеряно соединение с сервером', 'error');
+                }
+            };
+            
+            fileSocket.onerror = function(error) {
+                console.error('❌ Ошибка WebSocket:', error);
+            };
+        }
+        
+        // ==================== Обработка событий ====================
+        function handleFileEvent(event) {
+            console.log('📁 Файловое событие:', event);
+            
+            // Обновляем список файлов только если событие в нашем чате
+            if (event.chatId === chatId) {
+                // Показываем уведомление
+                if (event.eventType === 'upload') {
+                    showToast(`📤 ${event.username} загрузил файл: ${event.file.name}`, 'info');
+                    // Добавляем файл в список без перезагрузки
+                    addFileToList(event.file);
+                } else if (event.eventType === 'delete') {
+                    showToast(`🗑️ ${event.username} удалил файл`, 'info');
+                    // Удаляем файл из списка без перезагрузки
+                    removeFileFromList(event.file.key);
+                }
+                
+                // Обновляем полный список для синхронизации
+                setTimeout(loadFiles, 500);
+            }
+        }
+        
+        // ==================== Управление списком файлов ====================
+        function addFileToList(file) {
+            const container = document.getElementById('fileList');
+            
+            // Убираем empty state если он есть
+            if (container.querySelector('.empty-state')) {
+                container.innerHTML = '';
+            }
+            
+            // Создаем элемент файла
+            const fileEl = createFileElement(file);
+            
+            // Добавляем в начало списка с анимацией
+            fileEl.classList.add('file-enter');
+            container.insertBefore(fileEl, container.firstChild);
+            
+            setTimeout(() => fileEl.classList.remove('file-enter'), 300);
+        }
+        
+        function removeFileFromList(key) {
+            const container = document.getElementById('fileList');
+            const fileElements = container.querySelectorAll('.file-item');
+            
+            for (const el of fileElements) {
+                const deleteBtn = el.querySelector('button[onclick*="deleteFile"]');
+                if (deleteBtn && deleteBtn.getAttribute('onclick').includes(key)) {
+                    el.classList.add('file-exit');
+                    setTimeout(() => {
+                        el.remove();
+                        // Если файлов больше нет, показываем empty state
+                        if (container.children.length === 0) {
+                            showEmptyState();
+                        }
+                    }, 300);
+                    break;
+                }
+            }
+        }
+        
+        function createFileElement(file) {
+            const div = document.createElement('div');
+            div.className = 'file-item';
+            
+            const size = (file.size / 1024).toFixed(1);
+            const date = new Date(file.uploadedAt).toLocaleString('ru-RU');
+            
+            // Определяем иконку по типу файла
+            let icon = '📄';
+            if (file.name.match(/\.(jpg|jpeg|png|gif|bmp|svg)$/i)) icon = '🖼️';
+            else if (file.name.match(/\.(mp4|avi|mov|wmv|flv|mkv)$/i)) icon = '🎥';
+            else if (file.name.match(/\.(mp3|wav|flac|aac|ogg)$/i)) icon = '🎵';
+            else if (file.name.match(/\.(pdf)$/i)) icon = '📕';
+            else if (file.name.match(/\.(doc|docx)$/i)) icon = '📘';
+            else if (file.name.match(/\.(xls|xlsx)$/i)) icon = '📊';
+            else if (file.name.match(/\.(zip|rar|7z|tar|gz)$/i)) icon = '🗜️';
+            
+            div.innerHTML = `
+                <div class="file-info">
+                    <span class="file-name">${icon} ${escapeHtml(file.name)}</span>
+                    <span class="file-meta">
+                        Загрузил: ${escapeHtml(file.uploaderId)} | 
+                        Размер: ${size} KB | 
+                        Дата: ${escapeHtml(date)}
+                    </span>
+                </div>
+                <div class="file-actions">
+                    <button onclick="downloadFile('${escapeHtml(file.key)}')" class="btn-small btn-success">Скачать</button>
+                    <button onclick="deleteFile('${escapeHtml(file.key)}', '${escapeHtml(file.name)}')" class="btn-small btn-danger">Удалить</button>
+                </div>
+            `;
+            
+            return div;
+        }
+        
+        function showEmptyState() {
+            const container = document.getElementById('fileList');
+            container.innerHTML = `
+                <div class="empty-state">
+                    <div class="icon">📭</div>
+                    <h3>Здесь пока ничего нет</h3>
+                    <p>Загрузите первый файл, чтобы он появился в этом списке</p>
+                    <button onclick="document.getElementById('fileInput').click()" class="btn-small btn-success">
+                        📤 Загрузить файл
+                    </button>
+                </div>
+            `;
+        }
+        
+        // ==================== Загрузка файлов ====================
+        async function loadFiles() {
+            const container = document.getElementById('fileList');
+            
+            try {
+                const response = await fetch(`/api/files/list?chat_id=${chatId}`);
+                if (!response.ok) throw new Error('Ошибка загрузки');
+                
+                const files = await response.json();
+                container.innerHTML = '';
+                
+                if (!files || files.length === 0) {
+                    showEmptyState();
+                    return;
+                }
+                
+                files.forEach(file => {
+                    container.appendChild(createFileElement(file));
+                });
+                
+            } catch (err) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <div class="icon">❌</div>
+                        <h3>Ошибка загрузки</h3>
+                        <p>${escapeHtml(err.message)}</p>
+                        <button onclick="loadFiles()" class="btn-small btn-success">Повторить</button>
+                    </div>
+                `;
+            }
+        }
+        
+        // ==================== Загрузка файла ====================
+        async function uploadFile(event) {
+            event.preventDefault();
+            
+            const fileInput = document.getElementById('fileInput');
+            const file = fileInput.files[0];
+            if (!file) return;
+            
+            // Проверка размера (100 MB)
+            const maxSize = 100 * 1024 * 1024;
+            if (file.size > maxSize) {
+                showToast('❌ Файл слишком большой (макс. 100 MB)', 'error');
+                return;
+            }
+            
+            // Показываем прогресс
+            const progress = document.getElementById('uploadProgress');
+            const progressBar = document.getElementById('progressBar');
+            progress.style.display = 'block';
+            progressBar.style.width = '0%';
+            progressBar.textContent = '0%';
+            
+            try {
+                // 1. Получаем URL для загрузки
+                showToast('🔄 Получение ссылки для загрузки...', 'info');
+                
+                const urlResponse = await fetch(
+                    `/api/files/upload-url?chat_id=${chatId}&filename=${encodeURIComponent(file.name)}`
+                );
+                
+                if (!urlResponse.ok) {
+                    const error = await urlResponse.text();
+                    throw new Error(error || 'Ошибка получения URL');
+                }
+                
+                const { upload_url, form_data } = await urlResponse.json();
+                
+                // 2. Создаем FormData для загрузки
+                const formData = new FormData();
+                for (const [key, value] of Object.entries(form_data)) {
+                    formData.append(key, value);
+                }
+                formData.append('file', file);
+                
+                // 3. Загружаем с прогрессом
+                const xhr = new XMLHttpRequest();
+                
+                await new Promise((resolve, reject) => {
+                    xhr.open('POST', upload_url);
+                    
+                    xhr.upload.onprogress = (e) => {
+                        if (e.lengthComputable) {
+                            const percent = Math.round((e.loaded / e.total) * 100);
+                            progressBar.style.width = percent + '%';
+                            progressBar.textContent = percent + '%';
+                        }
+                    };
+                    
+                    // В функции uploadFile, при получении ответа от MinIO
+                    xhr.onload = async () => {
+                        if (xhr.status === 204) {
+                            // Получаем Location из заголовков ответа MinIO
+                            const location = xhr.getResponseHeader('Location');
+                            let objectKey = '';
+                            
+                            if (location) {
+                                console.log('📍 Location из MinIO:', location);
+                                
+                                // MinIO возвращает: /bucket-name/object-key
+                                // Убираем начальный слеш и имя bucket
+                                const parts = location.split('/');
+                                // parts: ["", "bucket-name", "chat-general", "user", "timestamp-filename"]
+                                
+                                // Пропускаем пустой первый элемент и имя bucket
+                                if (parts.length >= 3) {
+                                    // Берем все после bucket-name
+                                    objectKey = parts.slice(2).join('/');
+                                } else {
+                                    objectKey = parts.join('/');
+                                }
+                                
+                                console.log('🔑 Извлеченный ключ:', objectKey);
+                            } else {
+                                // Если нет Location, формируем ключ сами
+                                const timestamp = Date.now();
+                                objectKey = `chat-${chatId}/${username}/${timestamp}-${file.name}`;
+                                console.log('🔑 Сформированный ключ (нет Location):', objectKey);
+                            }
+                            
+                            // Уведомляем сервер о завершении загрузки
+                            try {
+                                console.log('📤 Отправка уведомления на сервер с ключом:', objectKey);
+                                
+                                const notifyResponse = await fetch('/api/files/upload-complete', {
+                                    method: 'POST',
+                                    headers: {'Content-Type': 'application/json'},
+                                    body: JSON.stringify({
+                                        chat_id: chatId,
+                                        filename: file.name,
+                                        key: objectKey
+                                    })
+                                });
+                                
+                                if (!notifyResponse.ok) {
+                                    const errorText = await notifyResponse.text();
+                                    throw new Error(errorText || 'Ошибка уведомления');
+                                }
+                                
+                                const result = await notifyResponse.json();
+                                console.log('✅ Уведомление отправлено успешно:', result);
+                                showToast('✅ Файл успешно загружен!', 'success');
+                                
+                            } catch (err) {
+                                console.error('❌ Ошибка уведомления:', err);
+                                showToast('⚠️ Файл загружен, но уведомление не отправлено', 'warning');
+                            }
+                            
+                            resolve();
+                        } else {
+                            console.error('❌ Ошибка загрузки, статус:', xhr.status);
+                            reject(new Error('Ошибка загрузки'));
+                        }
+                    };
+                    
+                    xhr.onerror = () => reject(new Error('Ошибка сети'));
+                    xhr.send(formData);
+                });
+                
+                // Очищаем input
+                fileInput.value = '';
+                
+                // Обновляем список
+                await loadFiles();
+                
+            } catch (err) {
+                showToast('❌ ' + err.message, 'error');
+                console.error('Upload error:', err);
+            } finally {
+                progress.style.display = 'none';
+            }
+        }
+        
+        // ==================== Скачивание файла ====================
+        async function downloadFile(key) {
+            try {
+                showToast('🔄 Получение ссылки для скачивания...', 'info');
+                
+                const response = await fetch(`/api/files/download-url?chat_id=${chatId}&key=${encodeURIComponent(key)}`);
+                if (!response.ok) throw new Error('Ошибка получения ссылки');
+                
+                const { download_url } = await response.json();
+                window.open(download_url, '_blank');
+                
+            } catch (err) {
+                showToast('❌ ' + err.message, 'error');
+            }
+        }
+        
+        // ==================== Удаление файла ====================
+        async function deleteFile(key, filename) {
+            if (!confirm(`Удалить файл "${filename}"?`)) return;
+            
+            try {
+                showToast('🔄 Удаление файла...', 'info');
+                
+                const response = await fetch('/api/files/delete', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ chat_id: chatId, key: key })
+                });
+                
+                if (!response.ok) throw new Error('Ошибка удаления');
+                
+                showToast('✅ Файл удален', 'success');
+                await loadFiles();
+                
+            } catch (err) {
+                showToast('❌ ' + err.message, 'error');
+            }
+        }
+        
+        // ==================== Утилиты ====================
+        function showToast(message, type = 'info') {
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            toast.textContent = message;
+            
+            const container = document.getElementById('toastContainer');
+            container.appendChild(toast);
+            
+            setTimeout(() => {
+                toast.style.animation = 'slideInRight 0.3s ease reverse';
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
+        }
+        
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        
+        function goToChat() {
+            window.location.href = '/chat';
+        }
+        
+        // ==================== Инициализация ====================
+        document.getElementById('uploadForm').addEventListener('submit', uploadFile);
+        
+        // Загружаем список при открытии
+        loadFiles();
+        
+        // Подключаем WebSocket
+        connectFileWebSocket();
+        
+        // Очищаем старые уведомления при закрытии страницы
+        window.addEventListener('beforeunload', function() {
+            if (fileSocket) {
+                fileSocket.close();
+            }
+        });
+    </script>
+</body>
+</html>

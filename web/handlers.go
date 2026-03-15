@@ -2,19 +2,16 @@ package web
 
 import (
 	"context"
-	"html/template"
 	"log"
 	"math/rand"
 	"net/http"
 	"strings"
 
-	"pigeongram/pkg/models" // DTO
-	// сущности БД
+	"pigeongram/pkg/models"
 	"pigeongram/repository/cache"
 	"pigeongram/repository/postgres"
 )
 
-// Хранилища
 var (
 	userRepo     *postgres.UserRepository
 	msgRepo      *postgres.MessageRepository
@@ -31,59 +28,66 @@ func InitStores(ur *postgres.UserRepository, mr *postgres.MessageRepository, sr 
 	log.Println("📦 Репозитории и кэш инициализированы")
 }
 
-// generateSessionID генерирует ID сессии
-func generateSessionID() string {
-	const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	b := make([]byte, 32)
-	for i := range b {
-		b[i] = letters[rand.Intn(len(letters))]
+// getUserFromSession получает пользователя из сессии
+func getUserFromSession(r *http.Request) string {
+	cookie, err := r.Cookie("session_id")
+	if err != nil {
+		return ""
 	}
-	return string(b)
+
+	ctx := context.Background()
+
+	// Пробуем получить из кэша
+	if messageCache != nil {
+		cachedSession, err := messageCache.GetSession(ctx, cookie.Value)
+		if err == nil && cachedSession != nil {
+			return cachedSession.Username
+		}
+	}
+
+	// Если нет в кэше, грузим из БД
+	session, err := sessionRepo.GetByID(ctx, cookie.Value)
+	if err != nil || session == nil || session.IsExpired() {
+		return ""
+	}
+
+	// Сохраняем в кэш
+	if messageCache != nil {
+		webSession := &models.Session{Username: session.User.Username}
+		messageCache.SetSession(ctx, cookie.Value, webSession)
+	}
+
+	return session.User.Username
 }
 
 // LoginPage - страница входа
 func LoginPage(w http.ResponseWriter, r *http.Request) {
-	// Если пользователь уже залогинен, перенаправляем в чат
 	if getUserFromSession(r) != "" {
 		http.Redirect(w, r, "/chat", http.StatusSeeOther)
 		return
 	}
 
-	// Получаем параметр ошибки из URL
 	errorMsg := r.URL.Query().Get("error")
-
-	tmpl := template.Must(template.ParseFiles("web/templates/login.html"))
-
-	// Передаем данные в шаблон
-	data := struct {
-		Error string
-	}{
-		Error: errorMsg,
+	data := map[string]interface{}{
+		"Error": errorMsg,
 	}
 
-	tmpl.Execute(w, data)
+	renderTemplate(w, "login.html", data)
 }
 
+// RegisterPage - страница регистрации
 func RegisterPage(w http.ResponseWriter, r *http.Request) {
-	// Если пользователь уже залогинен, перенаправляем в чат
 	if getUserFromSession(r) != "" {
 		http.Redirect(w, r, "/chat", http.StatusSeeOther)
 		return
 	}
 
-	// Получаем параметр ошибки из URL
 	errorMsg := r.URL.Query().Get("error")
-
-	tmpl := template.Must(template.ParseFiles("web/templates/register.html"))
-
-	// Передаем данные в шаблон
-	data := struct {
-		Error string
-	}{
-		Error: errorMsg,
+	data := map[string]interface{}{
+		"Error": errorMsg,
 	}
 
-	tmpl.Execute(w, data)
+	renderTemplate(w, "register.html", data)
 }
 
 // ChatPage - страница чата
@@ -94,8 +98,11 @@ func ChatPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tmpl := template.Must(template.ParseFiles("web/templates/chat.html"))
-	tmpl.Execute(w, username)
+	data := map[string]interface{}{
+		"Username": username,
+	}
+
+	renderTemplate(w, "chat.html", data)
 }
 
 // LoginHandler - обрабатывает вход
@@ -115,7 +122,6 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 
 	ctx := context.Background()
 
-	// Проверяем в БД
 	user, err := userRepo.GetByUsername(ctx, username)
 	if err != nil || user == nil || user.Password != password {
 		http.Redirect(w, r, "/?error=invalid", http.StatusSeeOther)
@@ -150,6 +156,7 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		HttpOnly: true,
 		MaxAge:   86400,
+		SameSite: http.SameSiteStrictMode,
 	})
 
 	log.Printf("✅ Пользователь %s вошел в систему", username)
@@ -172,26 +179,16 @@ func RegisterHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if len(username) < 3 || len(username) > 20 {
-		http.Redirect(w, r, "/register?error=username_length", http.StatusSeeOther)
-		return
-	}
-
-	if len(password) < 4 {
-		http.Redirect(w, r, "/register?error=password_length", http.StatusSeeOther)
-		return
-	}
-
 	ctx := context.Background()
 
-	// Проверяем существование в БД
+	// Проверяем существование
 	existingUser, _ := userRepo.GetByUsername(ctx, username)
 	if existingUser != nil {
 		http.Redirect(w, r, "/register?error=exists", http.StatusSeeOther)
 		return
 	}
 
-	// Создаем в БД
+	// Создаем пользователя
 	newUser := &models.User{
 		Username: username,
 		Password: password,
@@ -207,22 +204,18 @@ func RegisterHandler(w http.ResponseWriter, r *http.Request) {
 	// Получаем созданного пользователя с ID
 	createdUser, _ := userRepo.GetByUsername(ctx, username)
 
+	sessionID := generateSessionID()
+
+	// Создаем сессию
+	if createdUser != nil {
+		sessionRepo.CreateUserSession(ctx, createdUser.ID, sessionID)
+	}
+
 	// Сохраняем в кэш
 	if messageCache != nil {
 		webUser := &models.User{Username: username, Password: password}
 		messageCache.SetUser(ctx, username, webUser)
-	}
 
-	sessionID := generateSessionID()
-
-	// Создаем сессию в БД
-	err = sessionRepo.CreateUserSession(ctx, createdUser.ID, sessionID)
-	if err != nil {
-		log.Printf("❌ Ошибка создания сессии: %v", err)
-	}
-
-	// Сохраняем сессию в кэш
-	if messageCache != nil {
 		webSession := &models.Session{Username: username}
 		messageCache.SetSession(ctx, sessionID, webSession)
 	}
@@ -233,6 +226,7 @@ func RegisterHandler(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		HttpOnly: true,
 		MaxAge:   86400,
+		SameSite: http.SameSiteStrictMode,
 	})
 
 	log.Printf("✅ Новый пользователь зарегистрирован: %s", username)
@@ -245,10 +239,8 @@ func LogoutHandler(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		ctx := context.Background()
 
-		// Удаляем из БД
 		sessionRepo.Delete(ctx, cookie.Value)
 
-		// Удаляем из кэша
 		if messageCache != nil {
 			messageCache.InvalidateSession(ctx, cookie.Value)
 		}
@@ -266,6 +258,16 @@ func LogoutHandler(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
+// generateSessionID генерирует ID сессии
+func generateSessionID() string {
+	const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	b := make([]byte, 32)
+	for i := range b {
+		b[i] = letters[rand.Intn(len(letters))]
+	}
+	return string(b)
+}
+
 // AuthMiddleware - проверяет авторизацию пользователя
 func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -277,36 +279,4 @@ func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		}
 		next(w, r)
 	}
-}
-
-// getUserFromSession получает пользователя из сессии
-func getUserFromSession(r *http.Request) string {
-	cookie, err := r.Cookie("session_id")
-	if err != nil {
-		return ""
-	}
-
-	ctx := context.Background()
-
-	// Пробуем получить из кэша
-	if messageCache != nil {
-		cachedSession, err := messageCache.GetSession(ctx, cookie.Value)
-		if err == nil && cachedSession != nil {
-			return cachedSession.Username
-		}
-	}
-
-	// Если нет в кэше, грузим из БД
-	session, err := sessionRepo.GetByID(ctx, cookie.Value)
-	if err != nil || session == nil || session.IsExpired() {
-		return ""
-	}
-
-	// Сохраняем в кэш
-	if messageCache != nil {
-		webSession := &models.Session{Username: session.User.Username}
-		messageCache.SetSession(ctx, cookie.Value, webSession)
-	}
-
-	return session.User.Username
 }

@@ -14,6 +14,21 @@ import (
 	"github.com/go-redis/redis/v8"
 )
 
+// Типы сообщений WebSocket
+const (
+	TypeMessage   = "message" // новое сообщение в чате
+	TypeFileEvent = "file"    // событие с файлами (загрузка/удаление)
+)
+
+// FileEventData - данные о событии с файлами
+type FileEventData struct {
+	EventType string      `json:"eventType"` // "upload" или "delete"
+	ChatID    string      `json:"chatId"`
+	File      interface{} `json:"file"` // информация о файле
+	Username  string      `json:"username"`
+	Timestamp time.Time   `json:"timestamp"`
+}
+
 // Manager управляет WebSocket соединениями
 type Manager struct {
 	Clients   map[*Client]bool
@@ -22,6 +37,7 @@ type Manager struct {
 	Register   chan *Client
 	Unregister chan *Client
 	Broadcast  chan models.Message
+	FileEvents chan FileEventData // для файловых событий
 
 	// Репозитории
 	MsgRepo  *postgres.MessageRepository
@@ -50,6 +66,7 @@ func NewManager(
 		Register:    make(chan *Client),
 		Unregister:  make(chan *Client),
 		Broadcast:   make(chan models.Message, 100),
+		FileEvents:  make(chan FileEventData, 100),
 		MsgRepo:     msgRepo,
 		UserRepo:    userRepo,
 		Cache:       cache,
@@ -104,6 +121,15 @@ func (m *Manager) Run(ctx context.Context) {
 			// Отправляем локальным клиентам
 			m.broadcastToLocalClients(message)
 
+		case fileEvent := <-m.FileEvents: // 👈 НОВЫЙ ОБРАБОТЧИК
+			// Сохраняем в кэш? (опционально)
+
+			// Публикуем в Redis для других серверов
+			m.publishFileEventToRedis(fileEvent)
+
+			// Отправляем локальным клиентам
+			m.broadcastFileEventToLocalClients(fileEvent)
+
 		case redisMsg := <-m.RedisMsgCh:
 			// Получили сообщение от другого сервера
 			var wsMsg struct {
@@ -135,9 +161,73 @@ func (m *Manager) Run(ctx context.Context) {
 	}
 }
 
+// publishFileEventToRedis публикует событие о файле в Redis
+func (m *Manager) publishFileEventToRedis(event FileEventData) {
+	if m.RedisClient == nil {
+		log.Printf("⚠️ Redis не доступен, событие не будет отправлено другим серверам")
+		return
+	}
+
+	data, err := json.Marshal(event)
+	if err != nil {
+		log.Printf("❌ Ошибка сериализации файлового события: %v", err)
+		return
+	}
+
+	wsMsg := struct {
+		Type     string          `json:"type"`
+		ServerID string          `json:"server_id"`
+		Data     json.RawMessage `json:"data"`
+	}{
+		Type:     "file",
+		ServerID: m.ServerID,
+		Data:     data,
+	}
+
+	jsonData, _ := json.Marshal(wsMsg)
+
+	// Публикуем в оба канала для надежности
+	err = m.RedisClient.Publish(context.Background(), "chat:files", jsonData).Err()
+	if err != nil {
+		log.Printf("❌ Ошибка публикации в Redis канал chat:files: %v", err)
+	} else {
+		log.Printf("📤 Событие опубликовано в Redis канал chat:files")
+	}
+
+	// Также публикуем в общий канал для обратной совместимости
+	err = m.RedisClient.Publish(context.Background(), "chat:messages", jsonData).Err()
+	if err != nil {
+		log.Printf("❌ Ошибка публикации в Redis канал chat:messages: %v", err)
+	}
+}
+
+// broadcastFileEventToLocalClients рассылает событие локальным клиентам
+func (m *Manager) broadcastFileEventToLocalClients(event FileEventData) {
+	m.ClientsMu.RLock()
+	defer m.ClientsMu.RUnlock()
+
+	message := map[string]interface{}{
+		"type": "file",
+		"data": event,
+	}
+
+	clientsCount := 0
+	for client := range m.Clients {
+		// Можно фильтровать по чату, если нужно
+		select {
+		case client.SendFileEvent <- message:
+			clientsCount++
+		default:
+			log.Printf("⚠️ Канал клиента %s переполнен, пропускаем", client.Username)
+		}
+	}
+
+	log.Printf("📢 Файловое событие разослано %d клиентам", clientsCount)
+}
+
 // subscribeToRedis подписывается на каналы Redis
 func (m *Manager) subscribeToRedis(ctx context.Context) {
-	m.PubSub = m.RedisClient.Subscribe(ctx, "chat:messages")
+	m.PubSub = m.RedisClient.Subscribe(ctx, "chat:messages", "chat:files") // 👈 добавили "chat:files"
 
 	go func() {
 		for {
@@ -148,11 +238,36 @@ func (m *Manager) subscribeToRedis(ctx context.Context) {
 				continue
 			}
 
-			m.RedisMsgCh <- []byte(msg.Payload)
+			var wsMsg struct {
+				Type     string          `json:"type"`
+				ServerID string          `json:"server_id"`
+				Data     json.RawMessage `json:"data"`
+			}
+
+			if err := json.Unmarshal([]byte(msg.Payload), &wsMsg); err != nil {
+				log.Printf("❌ Ошибка парсинга Redis сообщения: %v", err)
+				continue
+			}
+
+			// Игнорируем свои сообщения
+			if wsMsg.ServerID == m.ServerID {
+				continue
+			}
+
+			switch wsMsg.Type {
+			case TypeFileEvent:
+				var event FileEventData
+				if err := json.Unmarshal(wsMsg.Data, &event); err != nil {
+					log.Printf("❌ Ошибка парсинга файлового события: %v", err)
+					continue
+				}
+				m.broadcastFileEventToLocalClients(event)
+
+			case TypeMessage:
+				// обработка текстовых сообщений (уже есть)
+			}
 		}
 	}()
-
-	log.Println("📡 Подписка на Redis Pub/Sub активирована")
 }
 
 // publishToRedis публикует сообщение в Redis

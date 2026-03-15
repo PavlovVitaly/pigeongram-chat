@@ -13,6 +13,10 @@
             <div class="user-info">
                 Вы вошли как: <strong id="current-user">{{.}}</strong>
                 <span class="connection-status" id="connection-status">(подключение...)</span>
+                <!-- Перейти в хранилище -->
+                <button onclick="goToFileStorage()" class="btn-small btn-success">
+                    📁 Файлы
+                </button>
                 <button id="logout-button" class="logout-button">Выйти</button>
             </div>
         </div>
@@ -39,6 +43,11 @@
         let reconnectAttempts = 0;
         const maxReconnectAttempts = 5;
         let isLoggingOut = false; // Флаг для отслеживания выхода
+
+        // Функция для перехода в хранилище
+        function goToFileStorage() {
+            window.location.href = '/files?chat_id=general';
+        }
 
         // Функция для создания WebSocket соединения
         function connectWebSocket() {

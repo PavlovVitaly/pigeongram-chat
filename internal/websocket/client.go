@@ -1,7 +1,6 @@
 package websocket
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
 	"time"
@@ -13,23 +12,25 @@ import (
 
 // Client представляет подключенного клиента
 type Client struct {
-	ID          string
-	Username    string
-	Conn        *websocket.Conn
-	Send        chan models.Message
-	Manager     *Manager
-	ConnectedAt time.Time
+	ID            string
+	Username      string
+	Conn          *websocket.Conn
+	Send          chan models.Message
+	SendFileEvent chan interface{}
+	Manager       *Manager
+	ConnectedAt   time.Time
 }
 
 // NewClient создает нового клиента
 func NewClient(conn *websocket.Conn, username string, manager *Manager) *Client {
 	return &Client{
-		ID:          generateClientID(),
-		Username:    username,
-		Conn:        conn,
-		Send:        make(chan models.Message, 256),
-		Manager:     manager,
-		ConnectedAt: time.Now(),
+		ID:            generateClientID(),
+		Username:      username,
+		Conn:          conn,
+		Send:          make(chan models.Message, 256),
+		SendFileEvent: make(chan interface{}, 32),
+		Manager:       manager,
+		ConnectedAt:   time.Now(),
 	}
 }
 
@@ -85,17 +86,13 @@ func (c *Client) WritePump() {
 				c.Conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
+			c.writeJSON(message)
 
-			c.Conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-			data, err := json.Marshal(message)
-			if err != nil {
-				log.Printf("❌ Ошибка сериализации: %v", err)
-				continue
-			}
-
-			if err := c.Conn.WriteMessage(websocket.TextMessage, data); err != nil {
+		case fileEvent, ok := <-c.SendFileEvent: // 👈 НОВЫЙ ОБРАБОТЧИК
+			if !ok {
 				return
 			}
+			c.writeJSON(fileEvent)
 
 		case <-ticker.C:
 			c.Conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
@@ -103,6 +100,13 @@ func (c *Client) WritePump() {
 				return
 			}
 		}
+	}
+}
+
+func (c *Client) writeJSON(data interface{}) {
+	c.Conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	if err := c.Conn.WriteJSON(data); err != nil {
+		log.Printf("❌ Ошибка отправки: %v", err)
 	}
 }
 
