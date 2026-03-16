@@ -7,6 +7,8 @@ import (
 	"sync"
 	"time"
 
+	"pigeongram/internal/metrics"
+	"pigeongram/internal/storage"
 	"pigeongram/pkg/models"
 	"pigeongram/repository/cache"
 	"pigeongram/repository/postgres"
@@ -16,17 +18,26 @@ import (
 
 // Типы сообщений WebSocket
 const (
-	TypeMessage   = "message" // новое сообщение в чате
-	TypeFileEvent = "file"    // событие с файлами (загрузка/удаление)
+	TypeMessage   = "message"
+	TypeFileEvent = "file"
+	TypeOnline    = "online"
+	TypeTyping    = "typing"
+	TypeSystem    = "system"
 )
 
-// FileEventData - данные о событии с файлами
+// OnlineData - данные о онлайн пользователях
+type OnlineData struct {
+	Count int      `json:"count"`
+	Users []string `json:"users"`
+}
+
+// FileEventData - данные о событиях с файлами
 type FileEventData struct {
 	EventType string      `json:"eventType"` // "upload" или "delete"
 	ChatID    string      `json:"chatId"`
 	File      interface{} `json:"file"`
 	Username  string      `json:"username"`
-	Owner     string      `json:"owner"` // владелец файла (для upload)
+	Owner     string      `json:"owner"` // владелец файла
 	Timestamp time.Time   `json:"timestamp"`
 }
 
@@ -38,23 +49,21 @@ type Manager struct {
 	Register   chan *Client
 	Unregister chan *Client
 	Broadcast  chan models.Message
-	FileEvents chan FileEventData // для файловых событий
+	FileEvents chan FileEventData
 
-	// Репозитории
+	OnlineUsers map[string]*Client
+	OnlineMu    sync.RWMutex
+
 	MsgRepo  *postgres.MessageRepository
 	UserRepo *postgres.UserRepository
 	Cache    cache.Cache
 
-	// Redis Pub/Sub
 	RedisClient *redis.Client
 	PubSub      *redis.PubSub
 	ServerID    string
-
-	// Канал для сообщений из Redis
-	RedisMsgCh chan []byte
+	RedisMsgCh  chan []byte
 }
 
-// NewManager создает новый менеджер
 func NewManager(
 	msgRepo *postgres.MessageRepository,
 	userRepo *postgres.UserRepository,
@@ -68,6 +77,7 @@ func NewManager(
 		Unregister:  make(chan *Client),
 		Broadcast:   make(chan models.Message, 100),
 		FileEvents:  make(chan FileEventData, 100),
+		OnlineUsers: make(map[string]*Client),
 		MsgRepo:     msgRepo,
 		UserRepo:    userRepo,
 		Cache:       cache,
@@ -81,22 +91,36 @@ func NewManager(
 func (m *Manager) Run(ctx context.Context) {
 	log.Printf("🚀 WebSocket менеджер запущен (ServerID: %s)", m.ServerID)
 
-	// Подписываемся на Redis Pub/Sub
+	metrics.OnlineUsers.Set(0)
+	metrics.ActiveConnections.Set(0)
+
 	if m.RedisClient != nil {
 		m.subscribeToRedis(ctx)
 	}
 
+	go m.broadcastOnlineUsersPeriodically(ctx)
+	go m.collectDBStatsPeriodically(ctx)
+
 	for {
 		select {
 		case client := <-m.Register:
+			metrics.ActiveConnections.Inc()
+
 			m.ClientsMu.Lock()
 			m.Clients[client] = true
 			m.ClientsMu.Unlock()
 
-			log.Printf("🔌 Клиент %s подключился (всего: %d)",
-				client.Username, len(m.Clients))
+			m.OnlineMu.Lock()
+			m.OnlineUsers[client.Username] = client
+			onlineCount := len(m.OnlineUsers)
+			m.OnlineMu.Unlock()
 
-			// Отправляем историю сообщений
+			metrics.OnlineUsers.Set(float64(onlineCount))
+
+			log.Printf("🔌 Клиент %s подключился (всего: %d, онлайн: %d)",
+				client.Username, len(m.Clients), onlineCount)
+
+			m.broadcastOnlineUsers()
 			go m.sendMessageHistory(client)
 
 		case client := <-m.Unregister:
@@ -104,105 +128,307 @@ func (m *Manager) Run(ctx context.Context) {
 			if _, ok := m.Clients[client]; ok {
 				delete(m.Clients, client)
 				close(client.Send)
-				log.Printf("🔌 Клиент %s отключился (всего: %d)",
-					client.Username, len(m.Clients))
+				close(client.SendFileEvent)
+				close(client.SendOnline)
+
+				metrics.ActiveConnections.Dec()
 			}
 			m.ClientsMu.Unlock()
 
-		case message := <-m.Broadcast:
-			// Сохраняем в БД
-			go m.saveMessageToDB(message)
+			m.OnlineMu.Lock()
+			delete(m.OnlineUsers, client.Username)
+			onlineCount := len(m.OnlineUsers)
+			m.OnlineMu.Unlock()
 
-			// Обновляем кэш
+			metrics.OnlineUsers.Set(float64(onlineCount))
+
+			log.Printf("🔌 Клиент %s отключился (всего: %d, онлайн: %d)",
+				client.Username, len(m.Clients), onlineCount)
+
+			m.broadcastOnlineUsers()
+
+		case message := <-m.Broadcast:
+			// Фильтрация пустых сообщений
+			if message.Text == "" {
+				log.Printf("⚠️ [MANAGER] Попытка отправить пустое сообщение, игнорируется")
+				continue
+			}
+
+			if message.Username == "" {
+				message.Username = "system"
+			}
+
+			if message.Timestamp.IsZero() {
+				message.Timestamp = time.Now()
+			}
+
+			metrics.MessagesTotal.Inc()
+
+			startDB := time.Now()
+			go m.saveMessageToDB(message)
+			metrics.DatabaseDuration.WithLabelValues("create_message").Observe(time.Since(startDB).Seconds())
+
 			go m.updateCache(message)
 
-			// Отправляем через Redis другим серверам
-			m.publishToRedis(message)
+			if m.RedisClient != nil {
+				m.publishToRedis(message)
+			}
 
-			// Отправляем локальным клиентам
 			m.broadcastToLocalClients(message)
 
-		case fileEvent := <-m.FileEvents: // 👈 НОВЫЙ ОБРАБОТЧИК
-			// Сохраняем в кэш? (опционально)
+		case fileEvent := <-m.FileEvents:
+			log.Printf("📁 Файловое событие: %s в чате %s от %s (владелец: %s)",
+				fileEvent.EventType, fileEvent.ChatID, fileEvent.Username, fileEvent.Owner)
 
-			// Публикуем в Redis для других серверов
-			m.publishFileEventToRedis(fileEvent)
+			if fileEvent.EventType == "upload" {
+				if fileInfo, ok := fileEvent.File.(storage.FileInfo); ok {
+					metrics.FilesUploadedTotal.Inc()
+					metrics.FilesSizeBytes.Add(float64(fileInfo.Size))
+					log.Printf("📊 Метрики файла: размер %d байт", fileInfo.Size)
+				}
+			}
 
-			// Отправляем локальным клиентам
+			if m.RedisClient != nil {
+				m.publishFileEventToRedis(fileEvent)
+			}
 			m.broadcastFileEventToLocalClients(fileEvent)
-
-		case redisMsg := <-m.RedisMsgCh:
-			// Получили сообщение от другого сервера
-			var wsMsg struct {
-				ServerID  string          `json:"server_id"`
-				Timestamp time.Time       `json:"timestamp"`
-				Data      json.RawMessage `json:"data"`
-			}
-
-			if err := json.Unmarshal(redisMsg, &wsMsg); err != nil {
-				log.Printf("❌ Ошибка парсинга Redis сообщения: %v", err)
-				continue
-			}
-
-			// Игнорируем свои сообщения
-			if wsMsg.ServerID == m.ServerID {
-				continue
-			}
-
-			// Парсим сообщение
-			var message models.Message
-			if err := json.Unmarshal(wsMsg.Data, &message); err != nil {
-				log.Printf("❌ Ошибка парсинга сообщения: %v", err)
-				continue
-			}
-
-			// Отправляем локальным клиентам
-			m.broadcastToLocalClients(message)
 		}
 	}
 }
 
-// publishFileEventToRedis публикует событие о файле в Redis
-func (m *Manager) publishFileEventToRedis(event FileEventData) {
-	if m.RedisClient == nil {
-		log.Printf("⚠️ Redis не доступен, событие не будет отправлено другим серверам")
-		return
+// sendMessageHistory отправляет историю сообщений клиенту
+func (m *Manager) sendMessageHistory(client *Client) {
+	ctx := context.Background()
+	var messages []models.Message
+
+	start := time.Now()
+	defer func() {
+		metrics.DatabaseDuration.WithLabelValues("get_history").Observe(time.Since(start).Seconds())
+	}()
+
+	// Пробуем из кэша
+	if m.Cache != nil {
+		cached, err := m.Cache.GetRecentMessages(ctx)
+		if err == nil && cached != nil {
+			messages = cached
+			metrics.CacheOperations.WithLabelValues("get", "hit").Inc()
+			log.Printf("📦 Загружено %d сообщений из кэша для %s", len(messages), client.Username)
+		} else {
+			metrics.CacheOperations.WithLabelValues("get", "miss").Inc()
+		}
 	}
 
-	data, err := json.Marshal(event)
-	if err != nil {
-		log.Printf("❌ Ошибка сериализации файлового события: %v", err)
-		return
+	// Если в кэше нет, грузим из БД
+	if len(messages) == 0 && m.MsgRepo != nil {
+		recent, err := m.MsgRepo.GetRecent(ctx, 100)
+		if err == nil {
+			for _, msg := range recent {
+				messages = append(messages, models.Message{
+					Username:  msg.User.Username,
+					Text:      msg.Content,
+					Timestamp: msg.Timestamp,
+				})
+			}
+			log.Printf("📜 Загружено %d сообщений из БД для %s", len(messages), client.Username)
+
+			if m.Cache != nil && len(messages) > 0 {
+				m.Cache.SetRecentMessages(ctx, messages)
+				metrics.CacheOperations.WithLabelValues("set", "success").Inc()
+			}
+		}
 	}
 
-	wsMsg := struct {
-		Type     string          `json:"type"`
-		ServerID string          `json:"server_id"`
-		Data     json.RawMessage `json:"data"`
-	}{
-		Type:     "file",
-		ServerID: m.ServerID,
-		Data:     data,
+	// Фильтрация пустых сообщений
+	validMessages := make([]models.Message, 0, len(messages))
+	for _, msg := range messages {
+		if msg.Text != "" && msg.Text != "null" && msg.Text != "undefined" {
+			if msg.Username == "" {
+				msg.Username = "system"
+			}
+			if msg.Timestamp.IsZero() {
+				msg.Timestamp = time.Now()
+			}
+			validMessages = append(validMessages, msg)
+		}
 	}
 
-	jsonData, _ := json.Marshal(wsMsg)
-
-	// Публикуем в оба канала для надежности
-	err = m.RedisClient.Publish(context.Background(), "chat:files", jsonData).Err()
-	if err != nil {
-		log.Printf("❌ Ошибка публикации в Redis канал chat:files: %v", err)
-	} else {
-		log.Printf("📤 Событие опубликовано в Redis канал chat:files")
+	// Сортируем по времени
+	for i := 0; i < len(validMessages)-1; i++ {
+		for j := i + 1; j < len(validMessages); j++ {
+			if validMessages[i].Timestamp.After(validMessages[j].Timestamp) {
+				validMessages[i], validMessages[j] = validMessages[j], validMessages[i]
+			}
+		}
 	}
 
-	// Также публикуем в общий канал для обратной совместимости
-	err = m.RedisClient.Publish(context.Background(), "chat:messages", jsonData).Err()
-	if err != nil {
-		log.Printf("❌ Ошибка публикации в Redis канал chat:messages: %v", err)
+	log.Printf("📜 [HISTORY] Отправка %d сообщений %s (отфильтровано из %d)",
+		len(validMessages), client.Username, len(messages))
+
+	for _, msg := range validMessages {
+		select {
+		case client.Send <- msg:
+		default:
+			log.Printf("⚠️ Канал клиента %s переполнен при отправке истории", client.Username)
+		}
 	}
 }
 
-// broadcastFileEventToLocalClients рассылает событие локальным клиентам
+// saveMessageToDB сохраняет сообщение в БД
+func (m *Manager) saveMessageToDB(message models.Message) {
+	if m.MsgRepo == nil {
+		return
+	}
+
+	ctx := context.Background()
+
+	start := time.Now()
+	defer func() {
+		metrics.DatabaseDuration.WithLabelValues("save_message").Observe(time.Since(start).Seconds())
+	}()
+
+	err := m.MsgRepo.Create(ctx, &message)
+	if err != nil {
+		log.Printf("❌ Ошибка сохранения в БД: %v", err)
+		metrics.DatabaseOperations.WithLabelValues("create", "error").Inc()
+	} else {
+		metrics.DatabaseOperations.WithLabelValues("create", "success").Inc()
+	}
+}
+
+// updateCache обновляет кэш
+func (m *Manager) updateCache(message models.Message) {
+	if m.Cache == nil {
+		return
+	}
+
+	ctx := context.Background()
+
+	start := time.Now()
+	defer func() {
+		metrics.DatabaseDuration.WithLabelValues("update_cache").Observe(time.Since(start).Seconds())
+	}()
+
+	cached, err := m.Cache.GetRecentMessages(ctx)
+	if err == nil && cached != nil {
+		updated := append(cached, message)
+		if len(updated) > 100 {
+			updated = updated[len(updated)-100:]
+		}
+		m.Cache.SetRecentMessages(ctx, updated)
+		metrics.CacheOperations.WithLabelValues("update", "success").Inc()
+	} else {
+		m.Cache.SetRecentMessages(ctx, []models.Message{message})
+		metrics.CacheOperations.WithLabelValues("set", "success").Inc()
+	}
+}
+
+// broadcastOnlineUsersPeriodically периодически обновляет список онлайн
+func (m *Manager) broadcastOnlineUsersPeriodically(ctx context.Context) {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			m.broadcastOnlineUsers()
+
+			m.OnlineMu.RLock()
+			onlineCount := len(m.OnlineUsers)
+			m.OnlineMu.RUnlock()
+
+			metrics.OnlineUsers.Set(float64(onlineCount))
+			metrics.ActiveConnections.Set(float64(len(m.Clients)))
+		}
+	}
+}
+
+// collectDBStatsPeriodically собирает статистику БД
+func (m *Manager) collectDBStatsPeriodically(ctx context.Context) {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			log.Println("📊 Остановка сбора статистики БД")
+			return
+		case <-ticker.C:
+			if m.MsgRepo == nil || m.UserRepo == nil {
+				log.Println("⚠️ Репозитории не инициализированы, пропускаем сбор статистики")
+				continue
+			}
+
+			queryCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+
+			if count, err := m.UserRepo.Count(queryCtx); err == nil {
+				metrics.TotalUsers.Set(float64(count))
+				log.Printf("📊 Всего пользователей: %d", count)
+			} else {
+				log.Printf("❌ Ошибка получения количества пользователей: %v", err)
+			}
+
+			if count, err := m.MsgRepo.Count(queryCtx); err == nil {
+				metrics.TotalMessages.Set(float64(count))
+				log.Printf("📊 Всего сообщений: %d", count)
+			} else {
+				log.Printf("❌ Ошибка получения количества сообщений: %v", err)
+			}
+
+			cancel()
+		}
+	}
+}
+
+// broadcastOnlineUsers рассылает список онлайн пользователей
+func (m *Manager) broadcastOnlineUsers() {
+	m.OnlineMu.RLock()
+	users := make([]string, 0, len(m.OnlineUsers))
+	for username := range m.OnlineUsers {
+		users = append(users, username)
+	}
+	m.OnlineMu.RUnlock()
+
+	data := OnlineData{
+		Count: len(users),
+		Users: users,
+	}
+
+	message := map[string]interface{}{
+		"type": "online",
+		"data": data,
+	}
+
+	m.ClientsMu.RLock()
+	defer m.ClientsMu.RUnlock()
+
+	for client := range m.Clients {
+		select {
+		case client.SendOnline <- message:
+		default:
+			log.Printf("⚠️ Не удалось отправить онлайн статус клиенту %s (канал переполнен)",
+				client.Username)
+		}
+	}
+}
+
+// broadcastToLocalClients рассылает сообщение локальным клиентам
+func (m *Manager) broadcastToLocalClients(message models.Message) {
+	m.ClientsMu.RLock()
+	defer m.ClientsMu.RUnlock()
+
+	for client := range m.Clients {
+		select {
+		case client.Send <- message:
+		default:
+			metrics.WebSocketErrors.WithLabelValues("send_queue_full").Inc()
+			log.Printf("⚠️ Канал клиента %s переполнен", client.Username)
+		}
+	}
+}
+
+// broadcastFileEventToLocalClients рассылает файловые события
 func (m *Manager) broadcastFileEventToLocalClients(event FileEventData) {
 	m.ClientsMu.RLock()
 	defer m.ClientsMu.RUnlock()
@@ -212,63 +438,13 @@ func (m *Manager) broadcastFileEventToLocalClients(event FileEventData) {
 		"data": event,
 	}
 
-	clientsCount := 0
 	for client := range m.Clients {
-		// Можно фильтровать по чату, если нужно
 		select {
 		case client.SendFileEvent <- message:
-			clientsCount++
 		default:
-			log.Printf("⚠️ Канал клиента %s переполнен, пропускаем", client.Username)
+			metrics.WebSocketErrors.WithLabelValues("file_queue_full").Inc()
 		}
 	}
-
-	log.Printf("📢 Файловое событие разослано %d клиентам", clientsCount)
-}
-
-// subscribeToRedis подписывается на каналы Redis
-func (m *Manager) subscribeToRedis(ctx context.Context) {
-	m.PubSub = m.RedisClient.Subscribe(ctx, "chat:messages", "chat:files") // 👈 добавили "chat:files"
-
-	go func() {
-		for {
-			msg, err := m.PubSub.ReceiveMessage(ctx)
-			if err != nil {
-				log.Printf("❌ Ошибка Redis Pub/Sub: %v", err)
-				time.Sleep(1 * time.Second)
-				continue
-			}
-
-			var wsMsg struct {
-				Type     string          `json:"type"`
-				ServerID string          `json:"server_id"`
-				Data     json.RawMessage `json:"data"`
-			}
-
-			if err := json.Unmarshal([]byte(msg.Payload), &wsMsg); err != nil {
-				log.Printf("❌ Ошибка парсинга Redis сообщения: %v", err)
-				continue
-			}
-
-			// Игнорируем свои сообщения
-			if wsMsg.ServerID == m.ServerID {
-				continue
-			}
-
-			switch wsMsg.Type {
-			case TypeFileEvent:
-				var event FileEventData
-				if err := json.Unmarshal(wsMsg.Data, &event); err != nil {
-					log.Printf("❌ Ошибка парсинга файлового события: %v", err)
-					continue
-				}
-				m.broadcastFileEventToLocalClients(event)
-
-			case TypeMessage:
-				// обработка текстовых сообщений (уже есть)
-			}
-		}
-	}()
 }
 
 // publishToRedis публикует сообщение в Redis
@@ -284,13 +460,11 @@ func (m *Manager) publishToRedis(message models.Message) {
 	}
 
 	wsMsg := struct {
-		ServerID  string    `json:"server_id"`
-		Timestamp time.Time `json:"timestamp"`
-		Data      []byte    `json:"data"`
+		ServerID string `json:"server_id"`
+		Data     []byte `json:"data"`
 	}{
-		ServerID:  m.ServerID,
-		Timestamp: time.Now(),
-		Data:      data,
+		ServerID: m.ServerID,
+		Data:     data,
 	}
 
 	jsonData, _ := json.Marshal(wsMsg)
@@ -301,126 +475,105 @@ func (m *Manager) publishToRedis(message models.Message) {
 	}
 }
 
-// broadcastToLocalClients рассылает сообщение локальным клиентам
-func (m *Manager) broadcastToLocalClients(message models.Message) {
-	m.ClientsMu.RLock()
-	defer m.ClientsMu.RUnlock()
-
-	for client := range m.Clients {
-		select {
-		case client.Send <- message:
-		default:
-			close(client.Send)
-			delete(m.Clients, client)
-		}
-	}
-}
-
-// sendMessageHistory отправляет историю сообщений клиенту
-func (m *Manager) sendMessageHistory(client *Client) {
-	ctx := context.Background()
-	var messages []models.Message
-
-	// Сначала пробуем из кэша
-	if m.Cache != nil {
-		cached, err := m.Cache.GetRecentMessages(ctx)
-		if err == nil && cached != nil {
-			messages = cached
-			log.Printf("📦 Загружено %d сообщений из кэша для %s",
-				len(messages), client.Username)
-		}
-	}
-
-	// Если в кэше нет, грузим из БД
-	if len(messages) == 0 && m.MsgRepo != nil {
-		recent, err := m.MsgRepo.GetRecent(ctx, 100)
-		if err == nil {
-			for _, msg := range recent {
-				messages = append(messages, models.Message{
-					Username:  msg.User.Username,
-					Text:      msg.Content,
-					Timestamp: msg.Timestamp,
-				})
-			}
-			log.Printf("📜 Загружено %d сообщений из БД для %s",
-				len(messages), client.Username)
-
-			// Сохраняем в кэш
-			if m.Cache != nil && len(messages) > 0 {
-				m.Cache.SetRecentMessages(ctx, messages)
-			}
-		}
-	}
-
-	// Сортируем по времени
-	for i := 0; i < len(messages)-1; i++ {
-		for j := i + 1; j < len(messages); j++ {
-			if messages[i].Timestamp.After(messages[j].Timestamp) {
-				messages[i], messages[j] = messages[j], messages[i]
-			}
-		}
-	}
-
-	// Отправляем клиенту
-	for _, msg := range messages {
-		client.Send <- msg
-	}
-}
-
-// saveMessageToDB сохраняет сообщение в БД
-func (m *Manager) saveMessageToDB(message models.Message) {
-	if m.MsgRepo == nil {
+// publishFileEventToRedis публикует файловое событие в Redis
+func (m *Manager) publishFileEventToRedis(event FileEventData) {
+	if m.RedisClient == nil {
 		return
 	}
 
-	ctx := context.Background()
-	err := m.MsgRepo.Create(ctx, &message)
+	data, err := json.Marshal(event)
 	if err != nil {
-		log.Printf("❌ Ошибка сохранения в БД: %v", err)
-	}
-}
-
-// updateCache обновляет кэш
-func (m *Manager) updateCache(message models.Message) {
-	if m.Cache == nil {
+		log.Printf("❌ Ошибка сериализации файлового события: %v", err)
 		return
 	}
 
-	ctx := context.Background()
+	wsMsg := struct {
+		ServerID string `json:"server_id"`
+		Data     []byte `json:"data"`
+	}{
+		ServerID: m.ServerID,
+		Data:     data,
+	}
 
-	// Получаем текущий кэш
-	cached, err := m.Cache.GetRecentMessages(ctx)
-	if err == nil && cached != nil {
-		// Добавляем новое сообщение
-		updated := append(cached, message)
+	jsonData, _ := json.Marshal(wsMsg)
 
-		// Оставляем последние 100
-		if len(updated) > 100 {
-			updated = updated[len(updated)-100:]
+	err = m.RedisClient.Publish(context.Background(), "chat:files", jsonData).Err()
+	if err != nil {
+		log.Printf("❌ Ошибка публикации в Redis: %v", err)
+	}
+}
+
+// subscribeToRedis подписывается на каналы Redis
+func (m *Manager) subscribeToRedis(ctx context.Context) {
+	m.PubSub = m.RedisClient.Subscribe(ctx, "chat:messages", "chat:files")
+
+	go func() {
+		for {
+			msg, err := m.PubSub.ReceiveMessage(ctx)
+			if err != nil {
+				log.Printf("❌ Ошибка Redis Pub/Sub: %v", err)
+				time.Sleep(1 * time.Second)
+				continue
+			}
+
+			m.RedisMsgCh <- []byte(msg.Payload)
 		}
+	}()
 
-		m.Cache.SetRecentMessages(ctx, updated)
-	} else {
-		m.Cache.SetRecentMessages(ctx, []models.Message{message})
+	go m.processRedisMessages(ctx)
+}
+
+// processRedisMessages обрабатывает сообщения из Redis
+func (m *Manager) processRedisMessages(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case redisMsg := <-m.RedisMsgCh:
+			var wsMsg struct {
+				ServerID string          `json:"server_id"`
+				Data     json.RawMessage `json:"data"`
+			}
+
+			if err := json.Unmarshal(redisMsg, &wsMsg); err != nil {
+				log.Printf("❌ Ошибка парсинга Redis сообщения: %v", err)
+				continue
+			}
+
+			if wsMsg.ServerID == m.ServerID {
+				continue
+			}
+
+			var message models.Message
+			if err := json.Unmarshal(wsMsg.Data, &message); err == nil {
+				m.broadcastToLocalClients(message)
+				continue
+			}
+
+			var fileEvent FileEventData
+			if err := json.Unmarshal(wsMsg.Data, &fileEvent); err == nil {
+				m.broadcastFileEventToLocalClients(fileEvent)
+				continue
+			}
+		}
 	}
 }
 
 // GetStats возвращает статистику менеджера
 func (m *Manager) GetStats() map[string]interface{} {
 	m.ClientsMu.RLock()
+	m.OnlineMu.RLock()
 	defer m.ClientsMu.RUnlock()
+	defer m.OnlineMu.RUnlock()
 
-	return map[string]interface{}{
-		"server_id":     m.ServerID,
-		"clients_count": len(m.Clients),
-		"clients":       getClientUsernames(m.Clients),
+	stats := map[string]interface{}{
+		"server_id":              m.ServerID,
+		"clients_count":          len(m.Clients),
+		"online_count":           len(m.OnlineUsers),
+		"redis_enabled":          m.RedisClient != nil,
+		"broadcast_queue_size":   len(m.Broadcast),
+		"file_events_queue_size": len(m.FileEvents),
 	}
-}
 
-func getClientUsernames(clients map[*Client]bool) []string {
-	usernames := make([]string, 0, len(clients))
-	for client := range clients {
-		usernames = append(usernames, client.Username)
-	}
-	return usernames
+	return stats
 }

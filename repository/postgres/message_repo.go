@@ -76,3 +76,10 @@ func (r *MessageRepository) DeleteOlderThan(ctx context.Context, days int) error
 	// TODO: реализовать удаление старых сообщений
 	return nil
 }
+
+// Count возвращает общее количество сообщений
+func (r *MessageRepository) Count(ctx context.Context) (int64, error) {
+	var count int64
+	err := r.db.WithContext(ctx).Model(&models.MessageEntity{}).Count(&count).Error
+	return count, err
+}

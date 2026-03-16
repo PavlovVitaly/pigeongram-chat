@@ -1,14 +1,19 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
+	"net/url"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"pigeongram/internal/metrics"
 	"pigeongram/internal/storage"
-	"pigeongram/internal/websocket" // 👈 ДОБАВЛЯЕМ ЭТОТ ИМПОРТ
+	"pigeongram/internal/websocket"
 )
 
 type FileHandler struct {
@@ -60,20 +65,47 @@ func (h *FileHandler) RequestUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Очищаем имя файла от path traversal
-	filename = strings.ReplaceAll(filename, "/", "")
-	filename = strings.ReplaceAll(filename, "\\", "")
-	filename = strings.ReplaceAll(filename, "..", "")
+	log.Printf("📤 [UPLOAD] Запрос на загрузку: user=%s, file=%s", username, filename)
+
+	// 👇 Улучшенная очистка имени файла
+	// Убираем path traversal
+	filename = filepath.Base(filename)
+
+	// Заменяем проблемные символы на безопасные
+	filename = strings.ReplaceAll(filename, "'", "_")  // апостроф
+	filename = strings.ReplaceAll(filename, "\"", "_") // кавычки
+	filename = strings.ReplaceAll(filename, "`", "_")  // бэктик
+	filename = strings.ReplaceAll(filename, "$", "_")  // доллар
+	filename = strings.ReplaceAll(filename, "&", "_")  // амперсанд
+	filename = strings.ReplaceAll(filename, "|", "_")  // пайп
+	filename = strings.ReplaceAll(filename, ";", "_")  // точка с запятой
+	filename = strings.ReplaceAll(filename, "(", "_")  // скобки
+	filename = strings.ReplaceAll(filename, ")", "_")
+	filename = strings.ReplaceAll(filename, "[", "_")
+	filename = strings.ReplaceAll(filename, "]", "_")
+	filename = strings.ReplaceAll(filename, "{", "_")
+	filename = strings.ReplaceAll(filename, "}", "_")
+
+	// Ограничиваем длину
+	if len(filename) > 200 {
+		ext := filepath.Ext(filename)
+		name := filename[:200-len(ext)]
+		filename = name + ext
+	}
+
+	log.Printf("📤 [UPLOAD] Очищенное имя: %s", filename)
 
 	url, formData, err := h.storage.GenerateUploadURL(r.Context(), chatID, username, filename)
 	if err != nil {
+		log.Printf("❌ [UPLOAD] Ошибка: %v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	response := map[string]interface{}{
-		"upload_url": url,
-		"form_data":  formData,
+		"upload_url":    url,
+		"form_data":     formData,
+		"safe_filename": filename,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -158,6 +190,9 @@ func (h *FileHandler) UploadComplete(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+
+	metrics.FilesUploadedTotal.Inc()
+	metrics.FilesSizeBytes.Add(float64(fileInfo.Size))
 }
 
 // ListFiles - список файлов в чате
@@ -196,6 +231,7 @@ func (h *FileHandler) ListFiles(w http.ResponseWriter, r *http.Request) {
 func (h *FileHandler) GetDownloadURL(w http.ResponseWriter, r *http.Request) {
 	username := getUserFromSession(r)
 	if username == "" {
+		log.Printf("❌ [DOWNLOAD] Неавторизованный доступ")
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -203,20 +239,30 @@ func (h *FileHandler) GetDownloadURL(w http.ResponseWriter, r *http.Request) {
 	chatID := r.URL.Query().Get("chat_id")
 	objectKey := r.URL.Query().Get("key")
 
+	log.Printf("📥 [DOWNLOAD] Запрос: user=%s, chat=%s, key=%s",
+		username, chatID, objectKey)
+
 	if chatID == "" || objectKey == "" {
+		log.Printf("❌ [DOWNLOAD] Отсутствуют параметры")
 		http.Error(w, "chat_id and key required", http.StatusBadRequest)
 		return
 	}
 
-	log.Printf("📥 [DOWNLOAD] Запрос на скачивание: чат=%s, файл=%s, пользователь=%s",
-		chatID, objectKey, username)
+	// Декодируем URL-encoded ключ
+	decodedKey, err := url.QueryUnescape(objectKey)
+	if err != nil {
+		decodedKey = objectKey
+	}
+	log.Printf("🔑 [DOWNLOAD] Декодированный ключ: %s", decodedKey)
 
-	url, err := h.storage.GenerateDownloadURL(r.Context(), chatID, objectKey)
+	url, err := h.storage.GenerateDownloadURL(r.Context(), chatID, decodedKey)
 	if err != nil {
 		log.Printf("❌ [DOWNLOAD] Ошибка: %v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	log.Printf("✅ [DOWNLOAD] URL сгенерирован: %s", url)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
@@ -228,6 +274,7 @@ func (h *FileHandler) GetDownloadURL(w http.ResponseWriter, r *http.Request) {
 func (h *FileHandler) DeleteFile(w http.ResponseWriter, r *http.Request) {
 	username := getUserFromSession(r)
 	if username == "" {
+		log.Printf("❌ [DELETE] Неавторизованный доступ")
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -238,48 +285,203 @@ func (h *FileHandler) DeleteFile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Printf("❌ [DELETE] Ошибка парсинга: %v", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	log.Printf("🗑️ [DELETE] Запрос на удаление: чат=%s, файл=%s, пользователь=%s",
-		req.ChatID, req.Key, username)
+	log.Printf("🗑️ [DELETE] Запрос: user=%s, chat=%s, key=%s",
+		username, req.ChatID, req.Key)
 
-	// Передаем username для проверки прав
-	err := h.storage.DeleteFile(r.Context(), req.ChatID, req.Key, username)
-	if err != nil {
-		log.Printf("❌ [DELETE] Ошибка: %v", err)
-
-		// Возвращаем понятную ошибку
-		if strings.Contains(err.Error(), "только владелец") {
-			http.Error(w, "Вы можете удалять только свои файлы", http.StatusForbidden)
-		} else {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-		}
+	if req.ChatID == "" || req.Key == "" {
+		log.Printf("❌ [DELETE] Отсутствуют параметры")
+		http.Error(w, "chat_id and key required", http.StatusBadRequest)
 		return
 	}
 
-	// Отправляем событие о удалении
+	// Декодируем URL-encoded ключ
+	decodedKey, err := url.QueryUnescape(req.Key)
+	if err != nil {
+		decodedKey = req.Key
+	}
+	log.Printf("🔑 [DELETE] Декодированный ключ: %s", decodedKey)
+
+	// Проверяем, что файл принадлежит чату
+	expectedPrefix := fmt.Sprintf("chat-%s/", req.ChatID)
+	if !strings.HasPrefix(decodedKey, expectedPrefix) {
+		log.Printf("❌ [DELETE] Файл не принадлежит чату: %s", decodedKey)
+		http.Error(w, "File does not belong to this chat", http.StatusForbidden)
+		return
+	}
+
+	// Извлекаем владельца
+	parts := strings.Split(decodedKey, "/")
+	if len(parts) < 2 {
+		log.Printf("❌ [DELETE] Неверный формат ключа: %s", decodedKey)
+		http.Error(w, "Invalid file key format", http.StatusBadRequest)
+		return
+	}
+
+	fileOwner := parts[1]
+	log.Printf("👤 [DELETE] Владелец: %s, запросил: %s", fileOwner, username)
+
+	if fileOwner != username {
+		log.Printf("⛔ [DELETE] Доступ запрещен")
+		http.Error(w, "You can only delete your own files", http.StatusForbidden)
+		return
+	}
+
+	err = h.storage.DeleteFile(r.Context(), req.ChatID, decodedKey, username)
+	if err != nil {
+		log.Printf("❌ [DELETE] Ошибка: %v", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("✅ [DELETE] Файл удален: %s", decodedKey)
+
+	// Отправляем событие
 	if h.wsManager != nil {
 		event := websocket.FileEventData{
 			EventType: "delete",
 			ChatID:    req.ChatID,
-			File:      map[string]string{"key": req.Key},
+			File:      map[string]string{"key": decodedKey},
 			Username:  username,
+			Owner:     username,
 			Timestamp: time.Now(),
 		}
 
 		select {
 		case h.wsManager.FileEvents <- event:
-			log.Printf("📤 [DELETE] Событие об удалении отправлено в WebSocket")
+			log.Printf("📤 [DELETE] Событие отправлено")
 		default:
-			log.Printf("⚠️ [DELETE] Канал файловых событий переполнен")
+			log.Printf("⚠️ [DELETE] Канал переполнен")
 		}
 	}
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{
 		"status":  "ok",
-		"message": "Файл удален",
+		"message": "File deleted",
 	})
+}
+
+// DebugLastMessages - показывает последние сообщения в системе (для отладки)
+func (h *FileHandler) DebugLastMessages(w http.ResponseWriter, r *http.Request) {
+	username := getUserFromSession(r)
+	if username == "" {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Только для администратора (временно)
+	if username != "admin" && username != "test" {
+		http.Error(w, "Доступ запрещен", http.StatusForbidden)
+		return
+	}
+
+	ctx := context.Background()
+
+	// Получаем последние сообщения из репозитория
+	// Для этого нужно, чтобы в messageRepo был метод GetRecent
+	if msgRepo == nil {
+		http.Error(w, "Message repository not available", http.StatusInternalServerError)
+		return
+	}
+
+	// Получаем последние 50 сообщений
+	messages, err := msgRepo.GetRecent(ctx, 50)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Конвертируем в DTO для вывода
+	result := make([]map[string]interface{}, 0, len(messages))
+	for _, msg := range messages {
+		result = append(result, map[string]interface{}{
+			"id":        msg.ID,
+			"username":  msg.User.Username,
+			"text":      msg.Content,
+			"timestamp": msg.Timestamp,
+			"user_id":   msg.UserID,
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":   "ok",
+		"count":    len(result),
+		"messages": result,
+	})
+}
+
+// DebugTestMinIO - тестирование MinIO
+func (h *FileHandler) DebugTestMinIO(w http.ResponseWriter, r *http.Request) {
+	username := getUserFromSession(r)
+	if username == "" {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	ctx := context.Background()
+
+	// Проверяем список bucket'ов
+	buckets, err := h.storage.ListBuckets(ctx)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Проверяем файлы в общем чате
+	files, err := h.storage.ListFiles(ctx, "general")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	result := map[string]interface{}{
+		"status":           "ok",
+		"buckets":          buckets,
+		"bucket_name":      h.storage.GetBucketName(),
+		"files_in_general": files,
+		"files_count":      len(files),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
+}
+
+// DebugFileExists - проверка существования файла
+func (h *FileHandler) DebugFileExists(w http.ResponseWriter, r *http.Request) {
+	username := getUserFromSession(r)
+	if username == "" {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	key := r.URL.Query().Get("key")
+	if key == "" {
+		http.Error(w, "key required", http.StatusBadRequest)
+		return
+	}
+
+	ctx := context.Background()
+
+	// Пробуем получить информацию о файле
+	info, err := h.storage.GetFileInfo(ctx, "general", key)
+
+	result := map[string]interface{}{
+		"key":    key,
+		"exists": err == nil,
+	}
+
+	if err == nil {
+		result["info"] = info
+	} else {
+		result["error"] = err.Error()
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
 }

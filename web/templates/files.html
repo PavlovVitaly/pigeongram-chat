@@ -551,48 +551,61 @@
         // ==================== Загрузка файла ====================
         async function uploadFile(event) {
             event.preventDefault();
-            
+
             const fileInput = document.getElementById('fileInput');
             const file = fileInput.files[0];
             if (!file) return;
-            
+
+            // Проверка размера (100 MB)
             const maxSize = 100 * 1024 * 1024;
             if (file.size > maxSize) {
                 showToast('❌ Файл слишком большой (макс. 100 MB)', 'error');
                 return;
             }
-            
+
+            // 👇 Очищаем имя файла от специальных символов на клиенте
+            let safeFilename = file.name;
+            safeFilename = safeFilename.replace(/['"`$&|;()\[\]{}]/g, '_');
+            safeFilename = safeFilename.replace(/\s+/g, '_'); // пробелы в подчеркивания
+
+            console.log('📤 Оригинальное имя:', file.name);
+            console.log('📤 Безопасное имя:', safeFilename);
+
             const progress = document.getElementById('uploadProgress');
             const progressBar = document.getElementById('progressBar');
             progress.style.display = 'block';
             progressBar.style.width = '0%';
             progressBar.textContent = '0%';
-            
+
             try {
+                // 1. Получаем URL для загрузки с безопасным именем
                 showToast('🔄 Получение ссылки для загрузки...', 'info');
-                
+
                 const urlResponse = await fetch(
-                    `/api/files/upload-url?chat_id=${chatId}&filename=${encodeURIComponent(file.name)}`
+                    `/api/files/upload-url?chat_id=${chatId}&filename=${encodeURIComponent(safeFilename)}`
                 );
-                
+
                 if (!urlResponse.ok) {
                     const error = await urlResponse.text();
                     throw new Error(error || 'Ошибка получения URL');
                 }
-                
-                const { upload_url, form_data } = await urlResponse.json();
-                
+
+                const { upload_url, form_data, safe_filename } = await urlResponse.json();
+                console.log('📦 Данные загрузки:', { upload_url, form_data, safe_filename });
+
+                // 2. Создаем FormData для загрузки
                 const formData = new FormData();
                 for (const [key, value] of Object.entries(form_data)) {
                     formData.append(key, value);
                 }
                 formData.append('file', file);
-                
+
+                // 3. Загружаем с прогрессом
                 const xhr = new XMLHttpRequest();
-                
+
                 await new Promise((resolve, reject) => {
                     xhr.open('POST', upload_url);
-                    
+
                     xhr.upload.onprogress = (e) => {
                         if (e.lengthComputable) {
                             const percent = Math.round((e.loaded / e.total) * 100);
@@ -600,12 +613,12 @@
                             progressBar.textContent = percent + '%';
                         }
                     };
-                    
+
                     xhr.onload = async () => {
                         if (xhr.status === 204) {
                             const location = xhr.getResponseHeader('Location');
                             let objectKey = '';
-                            
+
                             if (location) {
                                 console.log('📍 Location из MinIO:', location);
                                 const parts = location.split('/');
@@ -617,47 +630,48 @@
                                 console.log('🔑 Извлеченный ключ:', objectKey);
                             } else {
                                 const timestamp = Date.now();
-                                objectKey = `chat-${chatId}/${username}/${timestamp}-${file.name}`;
+                                objectKey = `chat-${chatId}/${username}/${timestamp}-${safe_filename}`;
                                 console.log('🔑 Сформированный ключ:', objectKey);
                             }
-                            
+
+                            // Уведомляем сервер о завершении загрузки
                             try {
                                 const notifyResponse = await fetch('/api/files/upload-complete', {
                                     method: 'POST',
                                     headers: {'Content-Type': 'application/json'},
                                     body: JSON.stringify({
                                         chat_id: chatId,
-                                        filename: file.name,
+                                        filename: file.name, // оригинальное имя для отображения
                                         key: objectKey
                                     })
                                 });
-                                
+
                                 if (!notifyResponse.ok) {
                                     const errorText = await notifyResponse.text();
                                     throw new Error(errorText || 'Ошибка уведомления');
                                 }
-                                
+
                                 console.log('✅ Уведомление отправлено успешно');
                                 showToast('✅ Файл успешно загружен!', 'success');
-                                
+
                             } catch (err) {
                                 console.error('❌ Ошибка уведомления:', err);
                                 showToast('⚠️ Файл загружен, но уведомление не отправлено', 'warning');
                             }
-                            
+
                             resolve();
                         } else {
                             reject(new Error('Ошибка загрузки'));
                         }
                     };
-                    
+
                     xhr.onerror = () => reject(new Error('Ошибка сети'));
                     xhr.send(formData);
                 });
-                
+
                 fileInput.value = '';
                 await loadFiles();
-                
+
             } catch (err) {
                 showToast('❌ ' + err.message, 'error');
                 console.error('Upload error:', err);
@@ -668,47 +682,70 @@
         
         // ==================== Скачивание файла ====================
         async function downloadFile(key) {
+            console.log('⬇️ Запрос на скачивание:', key);
+
             try {
                 showToast('🔄 Получение ссылки для скачивания...', 'info');
-                
-                const response = await fetch(`/api/files/download-url?chat_id=${chatId}&key=${encodeURIComponent(key)}`);
-                if (!response.ok) throw new Error('Ошибка получения ссылки');
-                
-                const { download_url } = await response.json();
-                window.open(download_url, '_blank');
-                
+
+                // 👇 Важно: правильно кодируем ключ для URL
+                const encodedKey = encodeURIComponent(key);
+                const response = await fetch(`/api/files/download-url?chat_id=${chatId}&key=${encodedKey}`);
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    console.error('❌ Ошибка ответа:', response.status, errorText);
+                    throw new Error(errorText || 'Ошибка получения ссылки');
+                }
+
+                const data = await response.json();
+                console.log('✅ Получена ссылка:', data.download_url);
+
+                window.open(data.download_url, '_blank');
+                showToast('✅ Скачивание начато', 'success');
+
             } catch (err) {
+                console.error('❌ Ошибка скачивания:', err);
                 showToast('❌ ' + err.message, 'error');
             }
         }
         
         // ==================== Удаление файла ====================
         async function deleteFile(key, filename) {
+            console.log('🗑️ Запрос на удаление:', key, filename);
+                
             if (!confirm(`Удалить файл "${filename}"?`)) return;
-            
+                
             try {
                 showToast('🔄 Удаление файла...', 'info');
                 
                 const response = await fetch('/api/files/delete', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ chat_id: chatId, key: key })
+                    body: JSON.stringify({ 
+                        chat_id: chatId, 
+                        key: key  // отправляем как есть, сервер декодирует
+                    })
                 });
                 
                 if (!response.ok) {
-                    const error = await response.text();
+                    const errorText = await response.text();
+                    console.error('❌ Ошибка ответа:', response.status, errorText);
+                    
                     if (response.status === 403) {
-                        showToast('⛔ Вы можете удалять только свои файлы', 'error');
+                        throw new Error('Вы можете удалять только свои файлы');
                     } else {
-                        throw new Error(error || 'Ошибка удаления');
+                        throw new Error(errorText || 'Ошибка удаления');
                     }
-                    return;
                 }
+                
+                const result = await response.json();
+                console.log('✅ Результат удаления:', result);
                 
                 showToast('✅ Файл удален', 'success');
                 await loadFiles();
                 
             } catch (err) {
+                console.error('❌ Ошибка удаления:', err);
                 showToast('❌ ' + err.message, 'error');
             }
         }

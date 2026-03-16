@@ -181,26 +181,70 @@
             showSystemMessage('❌ Соединение с сервером потеряно');
         };
 
-        document.getElementById('messageForm').onsubmit = function(e) {
+        document.getElementById('messageForm').addEventListener('submit', function(e) {
             e.preventDefault();
+
             const input = document.getElementById('messageInput');
             const text = input.value.trim();
-            
-            if (text) {
-                socket.send(JSON.stringify({text: text}));
+
+            if (text && socket && socket.readyState === WebSocket.OPEN) {
+                console.log('📤 Отправка сообщения:', text);
+
+                // 👇 ПРАВИЛЬНЫЙ ФОРМАТ
+                const message = {
+                    type: 'chat',  // ← ДОЛЖЕН БЫТЬ ТИП 'chat'
+                    data: {
+                        text: text
+                    }
+                };
+
+                socket.send(JSON.stringify(message));
                 input.value = '';
             }
-        };
+        });
 
+        // В функции addMessage добавляем жесткую фильтрацию
         function addMessage(message) {
+            // 👇 ФИЛЬТРАЦИЯ: не добавляем пустые сообщения
+            if (!message || !message.text || message.text.trim() === '') {
+                console.warn('⚠️ Попытка добавить пустое сообщение, игнорируем:', message);
+                return;
+            }
+            
+            // Проверяем что есть отправитель
+            if (!message.username || message.username.trim() === '') {
+                message.username = 'Неизвестный';
+            }
+            
             const container = document.getElementById('messages');
+            
+            // Убираем системное сообщение если оно первое
+            if (container.children.length === 1 && 
+                container.children[0].classList.contains('system-message') &&
+                container.children[0].textContent.includes('Добро пожаловать')) {
+                container.innerHTML = '';
+            }
+            
             const div = document.createElement('div');
             div.className = 'message' + (message.username === username ? ' own-message' : '');
             
-            const time = new Date(message.timestamp);
-            const timeStr = time.getHours() + ':' + 
-                           String(time.getMinutes()).padStart(2, '0') + ':' + 
-                           String(time.getSeconds()).padStart(2, '0');
+            // Безопасное форматирование времени
+            let timeStr = '';
+            try {
+                const time = new Date(message.timestamp);
+                if (!isNaN(time.getTime())) {
+                    timeStr = time.getHours().toString().padStart(2, '0') + ':' + 
+                              time.getMinutes().toString().padStart(2, '0') + ':' + 
+                              time.getSeconds().toString().padStart(2, '0');
+                } else {
+                    const now = new Date();
+                    timeStr = now.getHours().toString().padStart(2, '0') + ':' + 
+                              now.getMinutes().toString().padStart(2, '0') + ':' + 
+                              now.getSeconds().toString().padStart(2, '0');
+                }
+            } catch (e) {
+                timeStr = '--:--:--';
+            }
             
             div.innerHTML = `
                 <div class="message-header">

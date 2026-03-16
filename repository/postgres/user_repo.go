@@ -66,3 +66,10 @@ func (r *UserRepository) Validate(ctx context.Context, username, password string
 	}
 	return user.Password == password, nil
 }
+
+// Count возвращает общее количество пользователей
+func (r *UserRepository) Count(ctx context.Context) (int64, error) {
+	var count int64
+	err := r.db.WithContext(ctx).Model(&models.UserEntity{}).Count(&count).Error
+	return count, err
+}

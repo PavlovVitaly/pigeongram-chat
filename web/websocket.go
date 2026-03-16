@@ -6,7 +6,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	ws "pigeongram/internal/websocket" // алиас для нашего пакета
+	ws "pigeongram/internal/websocket"
 )
 
 var upgrader = websocket.Upgrader{
@@ -47,8 +47,8 @@ func WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 	wsManager.Register <- client
 
 	// Запускаем горутины для чтения и записи
-	go client.ReadPump()
-	go client.WritePump()
+	go client.ReadPump()  // ← ТЕПЕРЬ МЕТОДЫ ЕСТЬ
+	go client.WritePump() // ← ТЕПЕРЬ МЕТОДЫ ЕСТЬ
 
 	log.Printf("🔌 Клиент %s подключился к WebSocket", username)
 }

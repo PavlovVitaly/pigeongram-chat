@@ -11,8 +11,10 @@ import (
 	"time"
 
 	"github.com/go-redis/redis/v8"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"pigeongram/config"
+	"pigeongram/internal/middleware"
 	"pigeongram/internal/storage"
 	"pigeongram/internal/websocket"
 	"pigeongram/repository/cache"
@@ -86,6 +88,21 @@ func main() {
 		log.Println("⚠️ Redis отключен (используется MemoryCache)")
 	}
 
+	// Инициализация MinIO
+	log.Println("📦 Подключение к MinIO...")
+	minioConfig := config.NewMinIOConfig()
+	minioClient, err := storage.NewMinIOClient(minioConfig)
+	if err != nil {
+		log.Printf("⚠️ Ошибка подключения к MinIO: %v", err)
+		log.Printf("⚠️ Функции файлов будут недоступны. Проверьте:")
+		log.Printf("   - Запущен ли MinIO контейнер? (docker ps | grep minio)")
+		log.Printf("   - Правильные ли credentials? (MINIO_ACCESS_KEY / MINIO_SECRET_KEY)")
+		log.Printf("   - Доступен ли эндпоинт? (%s)", minioConfig.Endpoint)
+		minioClient = nil
+	} else {
+		log.Println("✅ MinIO подключен успешно")
+	}
+
 	// Инициализация кэша
 	var messageCache cache.Cache
 	if redisClient != nil {
@@ -151,69 +168,72 @@ func main() {
 	web.InitStores(userRepo, msgRepo, sessionRepo, messageCache)
 	web.InitWebSocket(wsManager)
 
-	// Инициализация MinIO
-	log.Println("📦 Подключение к MinIO...")
-	minioConfig := config.NewMinIOConfig()
-	minioClient, err := storage.NewMinIOClient(minioConfig)
-	if err != nil {
-		log.Printf("⚠️ Ошибка подключения к MinIO: %v", err)
-		log.Println("⚠️ Функции файлов будут недоступны")
-		minioClient = nil
-	} else {
-		log.Println("✅ MinIO подключен успешно")
-	}
+	// Создаем роутер
+	mux := http.NewServeMux()
 
-	// Создаем file handler с wsManager
-	fileHandler := web.NewFileHandler(minioClient, wsManager)
+	// Публичные маршруты
+	mux.HandleFunc("/", web.LoginPage)
+	mux.HandleFunc("/login", web.LoginHandler)
+	mux.HandleFunc("/register", web.RegisterPage)
+	mux.HandleFunc("/register-handler", web.RegisterHandler)
 
-	// Маршруты
-	http.HandleFunc("/", web.LoginPage)
-	http.HandleFunc("/login", web.LoginHandler)
-	http.HandleFunc("/register", web.RegisterPage)
-	http.HandleFunc("/register-handler", web.RegisterHandler)
-	http.HandleFunc("/chat", web.AuthMiddleware(web.ChatPage))
-	http.HandleFunc("/logout", web.LogoutHandler)
-	http.HandleFunc("/ws", web.AuthMiddleware(web.WebSocketHandler))
+	// Защищенные маршруты
+	mux.HandleFunc("/chat", web.AuthMiddleware(web.ChatPage))
+	mux.HandleFunc("/logout", web.LogoutHandler)
+	mux.HandleFunc("/ws", web.AuthMiddleware(web.WebSocketHandler))
 
+	// Файловые маршруты
 	if minioClient != nil {
-		http.HandleFunc("/files", fileHandler.FilePage)
-		http.HandleFunc("/api/files/upload-url", fileHandler.RequestUpload)
-		http.HandleFunc("/api/files/upload-complete", fileHandler.UploadComplete)
-		http.HandleFunc("/api/files/list", fileHandler.ListFiles)
-		http.HandleFunc("/api/files/download-url", fileHandler.GetDownloadURL)
-		http.HandleFunc("/api/files/delete", fileHandler.DeleteFile)
-		http.HandleFunc("/api/files/test-notify", fileHandler.TestFileNotification) // для отладки
+		fileHandler := web.NewFileHandler(minioClient, wsManager)
+		mux.HandleFunc("/files", fileHandler.FilePage)
+		mux.HandleFunc("/api/files/upload-url", fileHandler.RequestUpload)
+		mux.HandleFunc("/api/files/upload-complete", fileHandler.UploadComplete)
+		mux.HandleFunc("/api/files/list", fileHandler.ListFiles)
+		mux.HandleFunc("/api/files/download-url", fileHandler.GetDownloadURL)
+		mux.HandleFunc("/api/files/delete", fileHandler.DeleteFile)
 
-		// Debug маршруты (только для разработки)
-		if config.GetServerEnvironment() == "development" {
-			http.HandleFunc("/debug/test-notify", fileHandler.TestFileNotification)
-			http.HandleFunc("/debug/websocket", fileHandler.DebugWebSocket)
-			http.HandleFunc("/debug/send-to-user", fileHandler.DebugSendTestEvent)
-			http.HandleFunc("/debug/check-file", fileHandler.DebugCheckFile)
-			log.Println("🔧 Debug маршруты активированы:")
-			log.Println("   GET /debug/test-notify?chat_id=general - отправить тестовое уведомление всем")
-			log.Println("   GET /debug/websocket - информация о WebSocket")
-			log.Println("   GET /debug/send-to-user?user=test&chat_id=general - отправить уведомление конкретному пользователю")
-		}
 		log.Println("📁 Файловое хранилище активировано с WebSocket уведомлениями")
+		log.Println("   Страница: http://localhost:8080/files?chat_id=general")
+	} else {
+		log.Println("⚠️ Файловое хранилище не доступно (проверьте MinIO)")
 	}
 
-	if config.GetServerEnvironment() == "development" {
-		http.HandleFunc("/debug/stats", web.DebugStatsHandler)
-		http.HandleFunc("/health", web.HealthCheckHandler)
-		http.HandleFunc("/metrics", web.MetricsHandler)
+	// 👇 НОВОЕ: Эндпоинт для метрик Prometheus
+	mux.Handle("/metrics", promhttp.Handler())
+	log.Println("📊 Метрики доступны на http://localhost:8080/metrics")
+
+	// Debug маршруты (только для разработки)
+	if config.GetServerEnvironment() == "development" && minioClient != nil {
+		fileHandler := web.NewFileHandler(minioClient, wsManager)
+		mux.HandleFunc("/debug/test-notify", fileHandler.TestFileNotification)
+		mux.HandleFunc("/debug/websocket", fileHandler.DebugWebSocket)
+		mux.HandleFunc("/debug/send-to-user", fileHandler.DebugSendTestEvent)
+		mux.HandleFunc("/debug/check-file", fileHandler.DebugCheckFile)
+		mux.HandleFunc("/debug/last-messages", fileHandler.DebugLastMessages)
+		mux.HandleFunc("/debug/test-minio", fileHandler.DebugTestMinIO)
+		mux.HandleFunc("/debug/file-exists", fileHandler.DebugFileExists)
+		log.Println("🔧 Debug маршруты активированы:")
+		log.Println("   GET /debug/test-notify?chat_id=general - отправить тестовое уведомление всем")
+		log.Println("   GET /debug/websocket - информация о WebSocket")
+		log.Println("   GET /debug/send-to-user?user=test&chat_id=general - отправить уведомление конкретному пользователю")
+		log.Println("   GET /debug/check-file?key=... - проверить доступ к файлу")
+		log.Println("   GET /debug/last-messages - последние сообщения")
 	}
 
 	// Статические файлы
 	fs := http.FileServer(http.Dir("web/static"))
-	http.Handle("/static/", http.StripPrefix("/static/", fs))
+	mux.Handle("/static/", http.StripPrefix("/static/", fs))
+
+	// 👇 НОВОЕ: Оборачиваем роутер в middleware для сбора метрик
+	handler := middleware.MetricsMiddleware(mux)
 
 	// Запускаем сервер
 	serverAddr := fmt.Sprintf(":%d", *port)
 	log.Printf("🕊️ PigeonGram сервер %s запущен на http://localhost%s", *serverID, serverAddr)
-	log.Printf("📊 Статистика: http://localhost%s/debug/stats", serverAddr)
+	log.Printf("📊 Статистика: http://localhost%s/debug/websocket", serverAddr)
+	log.Printf("📈 Prometheus метрики: http://localhost%s/metrics", serverAddr)
 
-	if err := http.ListenAndServe(serverAddr, nil); err != nil {
+	if err := http.ListenAndServe(serverAddr, handler); err != nil {
 		log.Fatal("❌ Ошибка запуска сервера:", err)
 	}
 }
