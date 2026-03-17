@@ -20,7 +20,7 @@ APP_USER="app"
 APP_DIR="/opt/pigeongram"
 DOMAIN=${DOMAIN:-"localhost"}
 
-# 👇 Функция поиска файла конфигурации
+# Функция поиска файла конфигурации
 find_env_file() {
     local found_env=""
     
@@ -129,6 +129,49 @@ check_root() {
     fi
 }
 
+# Функция синхронизации пароля PostgreSQL
+sync_postgres_password() {
+    print_step "Синхронизация пароля PostgreSQL"
+    
+    # Ждем, пока PostgreSQL полностью запустится
+    print_info "Ожидание запуска PostgreSQL..."
+    sleep 10
+    
+    local db_password=$(grep DB_PASSWORD "$APP_DIR/config/.env.production" | cut -d'=' -f2 | tr -d ' ' | tr -d '\n' | tr -d '\r')
+    
+    if [ -z "$db_password" ]; then
+        print_error "Не удалось получить пароль из .env.production"
+        return 1
+    fi
+    
+    print_info "Синхронизируем пароль для пользователя pigeongram..."
+    
+    # Пытаемся подключиться и установить пароль
+    docker exec -i pigeongram_postgres psql -U postgres -c "ALTER USER pigeongram WITH PASSWORD '$db_password';" 2>/dev/null
+    
+    if [ $? -eq 0 ]; then
+        print_success "Пароль успешно синхронизирован (через postgres)"
+    else
+        # Пробуем через пользователя pigeongram
+        docker exec -i pigeongram_postgres psql -U pigeongram -d postgres -c "ALTER USER pigeongram WITH PASSWORD '$db_password';" 2>/dev/null
+        
+        if [ $? -eq 0 ]; then
+            print_success "Пароль успешно синхронизирован (через pigeongram)"
+        else
+            print_warning "Не удалось синхронизировать пароль автоматически"
+            print_info "Возможно, пользователь уже создан с правильным паролем"
+        fi
+    fi
+    
+    # Проверяем подключение
+    if docker exec -i pigeongram_postgres psql -U pigeongram -d pigeongram -c "SELECT 1;" 2>/dev/null; then
+        print_success "✅ Подключение к PostgreSQL работает"
+    else
+        print_error "❌ Не удалось подключиться к PostgreSQL"
+        return 1
+    fi
+}
+
 # Функции установки сервера
 setup_server() {
     print_step "Установка и настройка сервера"
@@ -234,56 +277,9 @@ EOF
 deploy_app() {
     print_step "Деплой приложения"
     
-    # 👇 Поиск файла конфигурации
+    # Поиск файла конфигурации
     if ! find_env_file; then
         print_error "Не удалось найти файл конфигурации"
-        echo -e "${YELLOW}Создаю шаблон конфигурации...${NC}"
-        
-        # Создаем шаблон .env.production
-        mkdir -p "$SCRIPT_DIR"
-        cat > "$SCRIPT_DIR/.env.production.example" << EOF
-# PostgreSQL
-DB_HOST=postgres
-DB_PORT=5432
-DB_USER=pigeongram
-DB_PASSWORD=your_db_password_here
-DB_NAME=pigeongram
-DB_SSLMODE=disable
-
-# Redis
-REDIS_HOST=redis
-REDIS_PORT=6379
-REDIS_PASSWORD=your_redis_password_here
-REDIS_DB=0
-REDIS_TTL=5m
-REDIS_PREFIX=pigeongram
-REDIS_ENABLED=true
-
-# MinIO
-MINIO_ENDPOINT=minio:9000
-MINIO_ACCESS_KEY=minioadmin
-MINIO_SECRET_KEY=your_minio_password_here
-MINIO_USE_SSL=false
-MINIO_BUCKET=pigeongram-files
-MINIO_REGION=us-east-1
-MINIO_UPLOAD_EXPIRY=15m
-MINIO_DOWNLOAD_EXPIRY=24h
-MINIO_MAX_FILE_SIZE=104857600
-
-# Сервер
-SERVER_PORT=8080
-SERVER_ENVIRONMENT=production
-DOMAIN=localhost
-
-# Безопасность
-SESSION_DURATION=24h
-COOKIE_SECURE=false
-JWT_SECRET=your_jwt_secret_here
-EOF
-        echo -e "${GREEN}✅ Создан шаблон: $SCRIPT_DIR/.env.production.example${NC}"
-        echo -e "${YELLOW}Скопируйте его в .env.production и заполните пароли:${NC}"
-        echo -e "  cp $SCRIPT_DIR/.env.production.example $SCRIPT_DIR/.env.production"
-        echo -e "  nano $SCRIPT_DIR/.env.production"
         exit 1
     fi
     
@@ -340,6 +336,9 @@ EOF
         docker-compose up -d
     fi
     print_success "PostgreSQL и MinIO запущены"
+    
+    # Синхронизация пароля PostgreSQL
+    sync_postgres_password
     
     # Запуск мониторинга (опционально)
     if [ -d "$APP_DIR/repo/docker/monitoring" ]; then
