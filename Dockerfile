@@ -39,8 +39,11 @@ WORKDIR /app
 # Копируем бинарник
 COPY --from=builder --chown=app:app /app/bin/pigeongram /app/
 
-# Копируем веб-файлы (если есть)
-COPY --from=builder --chown=app:app /app/web /app/web 2>/dev/null || true
+# Проверяем существует ли папка web и копируем её, если есть
+RUN if [ -d /app/web ]; then \
+        mkdir -p /app/web && \
+        cp -r /app/web/* /app/web/ 2>/dev/null || true; \
+    fi
 
 # Создаем директорию для логов
 RUN mkdir -p /app/logs && chown -R app:app /app/logs
@@ -51,7 +54,7 @@ USER app
 # Порт приложения
 EXPOSE 8080
 
-# Healthcheck (опционально)
+# Healthcheck
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD wget -q --spider http://localhost:8080/health || exit 1
 
