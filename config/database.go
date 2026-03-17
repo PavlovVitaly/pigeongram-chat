@@ -158,11 +158,6 @@ func InitPostgres(config *DatabaseConfig) (*gorm.DB, error) {
 	// Создаем представления
 	createViews(db)
 
-	// Создаем тестовые данные если нужно
-	if config.ResetDB {
-		createTestData(db)
-	}
-
 	return db, nil
 }
 
@@ -238,61 +233,4 @@ func createViews(db *gorm.DB) {
 	}
 
 	log.Println("✅ Представления созданы")
-}
-
-// createTestData создает тестовые данные
-func createTestData(db *gorm.DB) {
-	log.Println("👤 Создание тестовых данных...")
-
-	// Проверяем, есть ли уже пользователи
-	var count int64
-	db.Raw("SELECT COUNT(*) FROM users").Scan(&count)
-
-	if count == 0 {
-		// Тестовые пользователи
-		testUsers := []struct {
-			Username string
-			Password string
-		}{
-			{"test", "test"},
-			{"admin", "admin"},
-		}
-
-		for _, user := range testUsers {
-			db.Exec("INSERT INTO users (username, password) VALUES (?, ?)",
-				user.Username, user.Password)
-		}
-		log.Println("✅ Тестовые пользователи созданы")
-
-		// Получаем ID пользователей
-		var testUserID, adminUserID int
-		db.Raw("SELECT id FROM users WHERE username = 'test'").Scan(&testUserID)
-		db.Raw("SELECT id FROM users WHERE username = 'admin'").Scan(&adminUserID)
-
-		// Тестовые сообщения
-		if testUserID != 0 && adminUserID != 0 {
-			now := time.Now()
-			testMessages := []struct {
-				UserID    int
-				Content   string
-				Timestamp time.Time
-			}{
-				{testUserID, "Добро пожаловать в PigeonGram! 🕊️", now.Add(-5 * time.Minute)},
-				{adminUserID, "Redis интеграция готова!", now.Add(-4 * time.Minute)},
-				{testUserID, "Сообщения сохраняются в Redis", now.Add(-3 * time.Minute)},
-				{adminUserID, "Работает быстро и надежно", now.Add(-2 * time.Minute)},
-				{testUserID, "Следующий этап - Pub/Sub", now.Add(-1 * time.Minute)},
-			}
-
-			for _, msg := range testMessages {
-				db.Exec(`
-                    INSERT INTO messages (user_id, content, timestamp) 
-                    VALUES (?, ?, ?)`,
-					msg.UserID, msg.Content, msg.Timestamp)
-			}
-			log.Printf("✅ Создано %d тестовых сообщений", len(testMessages))
-		}
-	} else {
-		log.Printf("✅ Найдено %d существующих пользователей", count)
-	}
 }

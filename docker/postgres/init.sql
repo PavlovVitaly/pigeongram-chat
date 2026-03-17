@@ -76,38 +76,6 @@ COMMENT ON COLUMN sessions.session_id IS 'ID сессии (из cookie)';
 COMMENT ON COLUMN sessions.expires_at IS 'Время истечения сессии';
 
 -- =====================================================
--- Добавляем тестовых пользователей
--- =====================================================
--- Пароли пока в открытом виде, позже заменим на хеши
-INSERT INTO users (username, password) VALUES
-    ('test', 'test'),
-    ('admin', 'admin')
-ON CONFLICT (username) DO NOTHING;
-
--- =====================================================
--- Добавляем тестовые сообщения
--- =====================================================
-DO $$
-DECLARE
-    test_user_id INTEGER;
-    admin_user_id INTEGER;
-BEGIN
-    -- Получаем ID пользователей
-    SELECT id INTO test_user_id FROM users WHERE username = 'test';
-    SELECT id INTO admin_user_id FROM users WHERE username = 'admin';
-    
-    -- Добавляем сообщения только если их еще нет
-    IF NOT EXISTS (SELECT 1 FROM messages LIMIT 1) THEN
-        INSERT INTO messages (user_id, content, timestamp) VALUES
-            (test_user_id, 'Добро пожаловать в PigeonGram! 🕊️', NOW() - INTERVAL '5 minutes'),
-            (admin_user_id, 'База данных PostgreSQL готова к работе!', NOW() - INTERVAL '4 minutes'),
-            (test_user_id, 'Теперь сообщения сохраняются надежно', NOW() - INTERVAL '3 minutes'),
-            (admin_user_id, 'Docker контейнер работает отлично', NOW() - INTERVAL '2 minutes'),
-            (test_user_id, 'Можно начинать разработку!', NOW() - INTERVAL '1 minute');
-    END IF;
-END $$;
-
--- =====================================================
 -- Создаем функцию для очистки старых сессий
 -- =====================================================
 CREATE OR REPLACE FUNCTION cleanup_expired_sessions()

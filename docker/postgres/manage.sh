@@ -10,9 +10,24 @@ NC='\033[0m' # No Color
 echo -e "${BLUE}🐳 PigeonGram Docker Management${NC}"
 echo "================================"
 
+# 👇 НОВАЯ ФУНКЦИЯ: проверка и создание сети
+ensure_network() {
+    local network_name="pigeongram_network"
+    
+    if ! docker network inspect $network_name >/dev/null 2>&1; then
+        echo -e "${YELLOW}🌐 Создание сети $network_name...${NC}"
+        docker network create $network_name
+        echo -e "${GREEN}✅ Сеть создана${NC}"
+    else
+        echo -e "${GREEN}✅ Сеть $network_name уже существует${NC}"
+    fi
+}
+
 case "$1" in
   start)
     echo -e "${GREEN}▶️ Запуск контейнеров...${NC}"
+    # 👇 ВЫЗЫВАЕМ функцию перед запуском
+    ensure_network
     docker-compose up -d
     echo -e "${GREEN}✅ Готово!${NC}"
     echo -e "PostgreSQL: ${BLUE}localhost:5432${NC}"
@@ -45,6 +60,7 @@ case "$1" in
   backup)
     BACKUP_FILE="backups/pigeongram_$(date +%Y%m%d_%H%M%S).sql"
     echo -e "${BLUE}💾 Создание бэкапа: $BACKUP_FILE${NC}"
+    mkdir -p backups
     docker-compose exec postgres pg_dump -U pigeongram pigeongram > $BACKUP_FILE
     echo -e "${GREEN}✅ Бэкап создан: $BACKUP_FILE${NC}"
     ;;
