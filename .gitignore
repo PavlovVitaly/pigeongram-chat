@@ -32,4 +32,4 @@ go.work.sum
 # .vscode/
 
 # Игнорировать примеры конфигурации
-deploy/config/.env.production.example
+deploy/config/.env.production
