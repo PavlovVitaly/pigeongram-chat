@@ -1,5 +1,5 @@
 # Этап 1: Сборка
-FROM golang:1.21-alpine AS builder
+FROM golang:1.25-alpine AS builder
 
 # Устанавливаем git для go mod
 RUN apk add --no-cache git ca-certificates
@@ -7,16 +7,11 @@ RUN apk add --no-cache git ca-certificates
 # Рабочая директория
 WORKDIR /app
 
-# Копируем файлы модулей (go.sum может отсутствовать)
+# Копируем файлы модулей
 COPY go.mod go.sum* ./
 
 # Загружаем зависимости
-RUN --mount=type=cache,target=/go/pkg/mod \
-    if [ -f go.sum ]; then \
-        go mod download -x; \
-    else \
-        go mod download -x; \
-    fi
+RUN go mod download -x
 
 # Копируем весь исходный код
 COPY . .
@@ -56,7 +51,7 @@ USER app
 # Порт приложения
 EXPOSE 8080
 
-# Healthcheck
+# Healthcheck (опционально)
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD wget -q --spider http://localhost:8080/health || exit 1
 
