@@ -144,8 +144,7 @@ services:
       
 networks:
   pigeongram_network:
-    driver: bridge
-    name: pigeongram_network
+    external: true 
 
 volumes:
   postgres_data:

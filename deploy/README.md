@@ -62,3 +62,61 @@ pigeongram monitor dashboards
 
 # Интерактивное меню
 pigeongram menu
+
+🆘 Troubleshooting
+# Проверка статуса
+pigeongram status
+
+# Просмотр логов при ошибках
+pigeongram logs app 100
+pigeongram logs postgres 100
+
+# Проверка доступности БД
+docker exec -it pigeongram_postgres psql -U pigeongram -d pigeongram -c "SELECT 1"
+
+# Проверка метрик
+curl http://localhost:8080/metrics | head -20
+
+# Ручной запуск конкретного сервиса
+cd /opt/pigeongram/repo/docker/postgres && ./manage.sh start
+cd /opt/pigeongram/repo/docker/monitoring && ./monitor.sh start
+
+📦 Резервное копирование
+
+Бэкапы автоматически создаются в /opt/pigeongram/backups/ и хранятся 30 дней.
+bash
+
+# Создать бэкап вручную
+pigeongram backup
+
+# Восстановить из бэкапа
+pigeongram restore 20250317_143022
+
+🔄 Обновление
+bash
+
+# Ручное обновление
+pigeongram update
+
+# Автоматическое обновление настроено на 3:00 каждую ночь
+
+📁 Структура директорий
+text
+
+/opt/pigeongram/
+├── config/              # Конфигурационные файлы
+├── backups/             # Резервные копии
+├── logs/                # Логи приложения
+├── ssl/                  # SSL сертификаты
+├── scripts/             # Скрипты управления
+├── repo/                 # Код приложения
+│   ├── docker/           # Docker файлы
+│   │   ├── postgres/     # PostgreSQL + MinIO
+│   │   └── monitoring/   # Prometheus + Grafana
+│   └── ...               # Остальной код
+└── data/                 # Данные Docker контейнеров
+    ├── postgres/
+    ├── redis/
+    ├── minio/
+    ├── prometheus/
+    └── grafana/

@@ -10,7 +10,6 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 
 PROJECT_ROOT="/opt/pigeongram"
-GIT_REPO="https://github.com/yourusername/pigeongram.git"
 
 print_step() {
     echo -e "\n${BLUE}=== $1 ===${NC}"
@@ -32,25 +31,31 @@ print_info() {
     echo -e "${PURPLE}ℹ️ $1${NC}"
 }
 
-# Проверка наличия .env файла
-if [ ! -f "$PROJECT_ROOT/config/.env.production" ]; then
+# Загружаем конфигурацию (включая GitHub токен)
+if [ -f "$PROJECT_ROOT/config/.env.production" ]; then
+    source "$PROJECT_ROOT/config/.env.production"
+else
     print_error "Файл .env.production не найден в $PROJECT_ROOT/config/"
-    echo "Скопируйте .env.production.example и отредактируйте:"
-    echo "cp $PROJECT_ROOT/config/.env.production.example $PROJECT_ROOT/config/.env.production"
-    echo "nano $PROJECT_ROOT/config/.env.production"
     exit 1
 fi
 
+# GitHub репозиторий из конфигурации
+GIT_REPO="${GITHUB_URL}"
+
 print_step "Начало деплоя PigeonGram"
+print_info "Репозиторий: https://github.com/${GITHUB_USER}/${GITHUB_REPO}"
 
 # 1. Загрузка исходного кода
-print_step "Клонирование репозитория"
+print_step "Клонирование/обновление репозитория"
 cd $PROJECT_ROOT
 if [ -d "repo" ]; then
     cd repo
-    git pull
+    print_info "Обновление существующего репозитория..."
+    git remote set-url origin $GIT_REPO
+    git pull origin main
     print_success "Репозиторий обновлен"
 else
+    print_info "Клонирование репозитория..."
     git clone $GIT_REPO repo
     cd repo
     print_success "Репозиторий склонирован"
@@ -63,7 +68,6 @@ print_success "Конфигурация скопирована"
 
 # 3. Генерация SSL сертификатов
 print_step "Генерация SSL сертификатов"
-source $PROJECT_ROOT/config/.env.production
 if [ ! -f "$PROJECT_ROOT/ssl/cert.pem" ]; then
     openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
         -keyout $PROJECT_ROOT/ssl/key.pem \

@@ -21,7 +21,19 @@ print_error() {
     echo -e "${RED}❌ $1${NC}"
 }
 
+# Загружаем конфигурацию (включая GitHub токен)
+if [ -f "$PROJECT_ROOT/config/.env.production" ]; then
+    source "$PROJECT_ROOT/config/.env.production"
+else
+    print_error "Файл .env.production не найден в $PROJECT_ROOT/config/"
+    exit 1
+fi
+
+# GitHub репозиторий из конфигурации
+GIT_REPO="${GITHUB_URL}"
+
 print_step "Начало обновления PigeonGram"
+print_info "Репозиторий: https://github.com/${GITHUB_USER}/${GITHUB_REPO}"
 
 # Создаем бэкап перед обновлением
 print_step "Создание резервной копии"
@@ -30,7 +42,8 @@ $PROJECT_ROOT/scripts/04-backup.sh
 # Обновляем код
 print_step "Обновление кода из репозитория"
 cd $PROJECT_ROOT/repo
-git pull
+git remote set-url origin $GIT_REPO
+git pull origin main
 print_success "Код обновлен"
 
 # Пересобираем приложение

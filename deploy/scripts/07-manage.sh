@@ -247,12 +247,22 @@ restore_all() {
 update_app() {
     print_step "Обновление приложения"
     
+    # Загружаем конфигурацию
+    if [ -f "$PROJECT_ROOT/config/.env.production" ]; then
+        source "$PROJECT_ROOT/config/.env.production"
+    fi
+    
+    GIT_REPO="${GITHUB_URL:-https://github.com/PavlovVitaly/pigeongram.git}"
+    
+    print_info "Репозиторий: https://github.com/${GITHUB_USER}/${GITHUB_REPO}"
+    
     # Создаем бэкап перед обновлением
     backup_all
     
     # Обновляем код
     cd $PROJECT_ROOT/repo
-    git pull
+    git remote set-url origin $GIT_REPO
+    git pull origin main
     
     # Пересобираем приложение
     docker stop pigeongram_app 2>/dev/null
