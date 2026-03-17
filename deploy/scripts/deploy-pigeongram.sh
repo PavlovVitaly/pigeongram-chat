@@ -16,16 +16,73 @@ NC='\033[0m'
 # Конфигурация по умолчанию
 GITHUB_USER="PavlovVitaly"
 GITHUB_REPO="pigeongram"
-GITHUB_TOKEN="${GITHUB_TOKEN:-""}"  # 👈 Берем из переменной окружения
 APP_USER="app"
 APP_DIR="/opt/pigeongram"
 DOMAIN=${DOMAIN:-"localhost"}
 
+# 👇 Функция поиска файла конфигурации
+find_env_file() {
+    local found_env=""
+    
+    # 1. Если задана переменная ENV_FILE, используем её
+    if [ -n "$ENV_FILE" ]; then
+        if [ -f "$ENV_FILE" ]; then
+            echo -e "${GREEN}✅ Использую конфигурацию из переменной ENV_FILE: $ENV_FILE${NC}"
+            ENV_PATH="$ENV_FILE"
+            return 0
+        else
+            echo -e "${RED}❌ Указанный ENV_FILE не существует: $ENV_FILE${NC}"
+            return 1
+        fi
+    fi
+    
+    # 2. Ищем .env.production в текущей директории
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    
+    if [ -f "$SCRIPT_DIR/.env.production" ]; then
+        echo -e "${GREEN}✅ Найден .env.production в директории скрипта${NC}"
+        ENV_PATH="$SCRIPT_DIR/.env.production"
+        return 0
+    fi
+    
+    # 3. Ищем .env в текущей директории
+    if [ -f "$SCRIPT_DIR/.env" ]; then
+        echo -e "${YELLOW}⚠️ Найден .env (не production), используем его${NC}"
+        ENV_PATH="$SCRIPT_DIR/.env"
+        return 0
+    fi
+    
+    # 4. Ищем в домашней директории
+    if [ -f "$HOME/.pigeongram.env" ]; then
+        echo -e "${YELLOW}⚠️ Использую $HOME/.pigeongram.env${NC}"
+        ENV_PATH="$HOME/.pigeongram.env"
+        return 0
+    fi
+    
+    # 5. Ищем в стандартной директории конфигов
+    if [ -f "/etc/pigeongram/env" ]; then
+        echo -e "${YELLOW}⚠️ Использую /etc/pigeongram/env${NC}"
+        ENV_PATH="/etc/pigeongram/env"
+        return 0
+    fi
+    
+    echo -e "${RED}❌ Файл конфигурации не найден!${NC}"
+    echo -e "Положите .env.production в одно из мест:"
+    echo -e "  - Переменная ENV_FILE=/path/to/.env.production"
+    echo -e "  - Текущая директория: $SCRIPT_DIR/.env.production"
+    echo -e "  - Текущая директория: $SCRIPT_DIR/.env"
+    echo -e "  - Домашняя директория: $HOME/.pigeongram.env"
+    echo -e "  - Системная: /etc/pigeongram/env"
+    return 1
+}
+
 # Формируем URL для клонирования
 if [ -n "$GITHUB_TOKEN" ]; then
     GITHUB_URL="https://${GITHUB_USER}:${GITHUB_TOKEN}@github.com/${GITHUB_USER}/${GITHUB_REPO}.git"
+    echo -e "${GREEN}✅ Использую GitHub токен для аутентификации${NC}"
 else
     GITHUB_URL="https://github.com/${GITHUB_USER}/${GITHUB_REPO}.git"
+    echo -e "${YELLOW}⚠️ GitHub токен не указан. Если репозиторий приватный, клонирование не удастся.${NC}"
 fi
 
 # Функции для вывода
@@ -177,39 +234,35 @@ EOF
 deploy_app() {
     print_step "Деплой приложения"
     
-    # Генерация паролей
-    POSTGRES_PASSWORD=$(generate_password)
-    REDIS_PASSWORD=$(generate_password)
-    MINIO_PASSWORD=$(generate_password)
-    JWT_SECRET=$(generate_jwt_secret)
-    
-    # Создание .env файла
-    cat > "$APP_DIR/config/.env.production" << EOF
-# =====================================================
-# PigeonGram - Production конфигурация
-# =====================================================
-
-# 🐘 PostgreSQL
+    # 👇 Поиск файла конфигурации
+    if ! find_env_file; then
+        print_error "Не удалось найти файл конфигурации"
+        echo -e "${YELLOW}Создаю шаблон конфигурации...${NC}"
+        
+        # Создаем шаблон .env.production
+        mkdir -p "$SCRIPT_DIR"
+        cat > "$SCRIPT_DIR/.env.production.example" << EOF
+# PostgreSQL
 DB_HOST=postgres
 DB_PORT=5432
 DB_USER=pigeongram
-DB_PASSWORD=${POSTGRES_PASSWORD}
+DB_PASSWORD=your_db_password_here
 DB_NAME=pigeongram
 DB_SSLMODE=disable
 
-# 🔴 Redis
+# Redis
 REDIS_HOST=redis
 REDIS_PORT=6379
-REDIS_PASSWORD=${REDIS_PASSWORD}
+REDIS_PASSWORD=your_redis_password_here
 REDIS_DB=0
 REDIS_TTL=5m
 REDIS_PREFIX=pigeongram
 REDIS_ENABLED=true
 
-# 📁 MinIO
+# MinIO
 MINIO_ENDPOINT=minio:9000
 MINIO_ACCESS_KEY=minioadmin
-MINIO_SECRET_KEY=${MINIO_PASSWORD}
+MINIO_SECRET_KEY=your_minio_password_here
 MINIO_USE_SSL=false
 MINIO_BUCKET=pigeongram-files
 MINIO_REGION=us-east-1
@@ -217,20 +270,29 @@ MINIO_UPLOAD_EXPIRY=15m
 MINIO_DOWNLOAD_EXPIRY=24h
 MINIO_MAX_FILE_SIZE=104857600
 
-# 🚀 Сервер
+# Сервер
 SERVER_PORT=8080
 SERVER_ENVIRONMENT=production
-DOMAIN=${DOMAIN}
+DOMAIN=localhost
 
-# 🔐 Безопасность
+# Безопасность
 SESSION_DURATION=24h
 COOKIE_SECURE=false
-JWT_SECRET=${JWT_SECRET}
+JWT_SECRET=your_jwt_secret_here
 EOF
-
-    chown "$APP_USER":"$APP_USER" "$APP_DIR/config/.env.production"
+        echo -e "${GREEN}✅ Создан шаблон: $SCRIPT_DIR/.env.production.example${NC}"
+        echo -e "${YELLOW}Скопируйте его в .env.production и заполните пароли:${NC}"
+        echo -e "  cp $SCRIPT_DIR/.env.production.example $SCRIPT_DIR/.env.production"
+        echo -e "  nano $SCRIPT_DIR/.env.production"
+        exit 1
+    fi
+    
+    # Копируем конфигурацию
+    print_info "Копирование конфигурации из $ENV_PATH"
+    cp "$ENV_PATH" "$APP_DIR/config/.env.production"
     chmod 600 "$APP_DIR/config/.env.production"
-    print_success "Конфигурация создана"
+    chown "$APP_USER":"$APP_USER" "$APP_DIR/config/.env.production"
+    print_success "Конфигурация скопирована"
     
     # Генерация SSL сертификатов
     if [ ! -f "$APP_DIR/ssl/cert.pem" ]; then
@@ -247,7 +309,6 @@ EOF
     cd "$APP_DIR"
     
     if [ -d "repo" ]; then
-        # Проверяем, является ли это git-репозиторием
         if [ -d "repo/.git" ]; then
             print_info "Репозиторий уже существует, обновляем..."
             cd repo
@@ -261,13 +322,17 @@ EOF
     else
         print_info "Клонирование из ${GITHUB_URL}"
         sudo -u "$APP_USER" git clone "$GITHUB_URL" repo
+        if [ $? -ne 0 ]; then
+            print_error "Ошибка клонирования репозитория. Проверьте токен."
+            exit 1
+        fi
     fi
+    print_success "Репозиторий склонирован"
     
     # Запуск инфраструктуры
     print_step "Запуск PostgreSQL и MinIO"
     cd "$APP_DIR/repo/docker/postgres"
     
-    # Проверяем наличие manage.sh
     if [ -f "manage.sh" ]; then
         chmod +x manage.sh
         ./manage.sh start
@@ -317,11 +382,16 @@ check_status() {
     
     echo ""
     echo "📊 Контейнеры:"
-    docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" || echo "   Docker не запущен"
+    docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || echo "   Docker не запущен"
     
     echo ""
-    echo "📁 Директории:"
-    ls -la "$APP_DIR" 2>/dev/null || echo "   Директория $APP_DIR не найдена"
+    echo "📁 Конфигурация:"
+    if [ -f "$APP_DIR/config/.env.production" ]; then
+        echo "   ✅ Конфигурация найдена"
+        echo "   📍 $APP_DIR/config/.env.production"
+    else
+        echo "   ❌ Конфигурация не найдена"
+    fi
     
     echo ""
     SERVER_IP=$(curl -s ifconfig.me 2>/dev/null || echo "unknown")
@@ -343,11 +413,13 @@ show_help() {
     echo ""
     echo "  Переменные окружения:"
     echo "    DOMAIN          - Домен (по умолчанию: localhost)"
-    echo "    GITHUB_TOKEN    - Токен для доступа к GitHub (обязательно для приватных репозиториев)"
+    echo "    GITHUB_TOKEN    - Токен для доступа к GitHub (для приватных репозиториев)"
+    echo "    ENV_FILE        - Путь к файлу .env.production"
     echo ""
     echo "  Примеры:"
-    echo "    GITHUB_TOKEN=ghp_xxx ./deploy-pigeongram.sh full"
-    echo "    DOMAIN=example.com GITHUB_TOKEN=ghp_xxx ./deploy-pigeongram.sh full"
+    echo "    GITHUB_TOKEN=ghp_xxx ENV_FILE=/home/user/.env.production ./deploy-pigeongram.sh full"
+    echo "    GITHUB_TOKEN=ghp_xxx ./deploy-pigeongram.sh full  # ищет .env.production"
+    echo "    ./deploy-pigeongram.sh app                         # ищет .env.production"
     echo ""
 }
 
@@ -357,25 +429,10 @@ main() {
         full)
             check_root
             print_header "Полное развертывание PigeonGram"
-            
-            if [ -z "$GITHUB_TOKEN" ]; then
-                print_warning "GITHUB_TOKEN не указан. Если репозиторий приватный, клонирование не удастся."
-                read -p "Продолжить без токена? (y/N) " -n 1 -r
-                echo
-                if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-                    exit 1
-                fi
-            fi
-            
             setup_server
             deploy_app
             check_status
             print_success "Развертывание завершено!"
-            echo ""
-            echo "📝 Сохраните эти пароли в безопасном месте:"
-            echo "   PostgreSQL пароль: $POSTGRES_PASSWORD"
-            echo "   Redis пароль: $REDIS_PASSWORD"
-            echo "   MinIO пароль: $MINIO_PASSWORD"
             ;;
         server)
             check_root
