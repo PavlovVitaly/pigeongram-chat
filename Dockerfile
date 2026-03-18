@@ -38,6 +38,7 @@ WORKDIR /app
 
 # Копируем бинарник
 COPY --from=builder --chown=app:app /app/bin/pigeongram /app/
+COPY --from=builder --chown=app:app /app/web /app/web/
 
 # Проверяем существует ли папка web и копируем её, если есть
 RUN if [ -d /app/web ]; then \
