@@ -129,83 +129,24 @@ check_root() {
     fi
 }
 
-# 👇 НОВАЯ ФУНКЦИЯ: синхронизация Redis
-sync_redis_password() {
-    print_step "Синхронизация пароля Redis"
+# 👇 Функция для отладки паролей
+debug_passwords() {
+    print_step "Отладка паролей"
     
-    local redis_password=$(grep REDIS_PASSWORD "$APP_DIR/config/.env.production" | cut -d'=' -f2 | tr -d ' ' | tr -d '\n' | tr -d '\r')
+    echo "Содержимое .env.production:"
+    cat "$APP_DIR/config/.env.production" | grep -E "PASSWORD|SECRET" || echo "   Пароли не найдены!"
     
-    if [ -z "$redis_password" ]; then
-        print_warning "REDIS_PASSWORD не найден в .env.production, использую значение по умолчанию"
-        redis_password="redis_secret"
-    fi
+    echo ""
+    echo "Проверка переменных в docker-compose:"
+    cd "$APP_DIR/repo/docker/postgres"
+    docker-compose config | grep -E "PASSWORD|SECRET" | head -10
     
-    print_info "Проверка подключения к Redis..."
-    
-    # Проверяем текущий пароль
-    if docker exec pigeongram_redis redis-cli -a "$redis_password" PING 2>/dev/null | grep -q "PONG"; then
-        print_success "✅ Redis уже работает с правильным паролем"
-    else
-        print_warning "⚠️ Пароль Redis не совпадает. Перезапускаем с правильным паролем..."
-        
-        # Останавливаем Redis
-        docker stop pigeongram_redis
-        docker rm pigeongram_redis
-        
-        # Запускаем заново с правильным паролем
-        cd "$APP_DIR/repo/docker/postgres"
-        docker-compose up -d redis
-        
-        sleep 5
-        
-        # Проверяем снова
-        if docker exec pigeongram_redis redis-cli -a "$redis_password" PING 2>/dev/null | grep -q "PONG"; then
-            print_success "✅ Redis успешно перезапущен с правильным паролем"
-        else
-            print_error "❌ Не удалось настроить Redis"
-        fi
-    fi
+    echo ""
+    echo "Проверка запущенных контейнеров:"
+    docker ps --format "table {{.Names}}\t{{.Status}}" | grep -E "redis|minio"
 }
 
-# 👇 НОВАЯ ФУНКЦИЯ: синхронизация MinIO
-sync_minio_password() {
-    print_step "Синхронизация пароля MinIO"
-    
-    local minio_password=$(grep MINIO_SECRET_KEY "$APP_DIR/config/.env.production" | cut -d'=' -f2 | tr -d ' ' | tr -d '\n' | tr -d '\r')
-    
-    if [ -z "$minio_password" ]; then
-        print_warning "MINIO_SECRET_KEY не найден в .env.production, использую значение по умолчанию"
-        minio_password="minioadmin"
-    fi
-    
-    print_info "Проверка подключения к MinIO..."
-    
-    # Проверяем доступность MinIO
-    if docker exec pigeongram_minio mc alias set myminio http://localhost:9000 minioadmin "$minio_password" 2>/dev/null; then
-        print_success "✅ MinIO уже работает с правильным паролем"
-    else
-        print_warning "⚠️ Пароль MinIO не совпадает. Перезапускаем с правильным паролем..."
-        
-        # Останавливаем MinIO
-        docker stop pigeongram_minio
-        docker rm pigeongram_minio
-        
-        # Запускаем заново с правильным паролем
-        cd "$APP_DIR/repo/docker/postgres"
-        docker-compose up -d minio
-        
-        sleep 10
-        
-        # Проверяем снова
-        if docker exec pigeongram_minio mc alias set myminio http://localhost:9000 minioadmin "$minio_password" 2>/dev/null; then
-            print_success "✅ MinIO успешно перезапущен с правильным паролем"
-        else
-            print_error "❌ Не удалось настроить MinIO"
-        fi
-    fi
-}
-
-# Функция синхронизации пароля PostgreSQL
+# 👇 Функция синхронизации пароля PostgreSQL
 sync_postgres_password() {
     print_step "Синхронизация пароля PostgreSQL"
     
@@ -245,6 +186,83 @@ sync_postgres_password() {
     else
         print_error "❌ Не удалось подключиться к PostgreSQL"
         return 1
+    fi
+}
+
+# 👇 Функция синхронизации Redis
+sync_redis_password() {
+    print_step "Синхронизация пароля Redis"
+    
+    local redis_password=$(grep REDIS_PASSWORD "$APP_DIR/config/.env.production" | cut -d'=' -f2 | tr -d ' ' | tr -d '\n' | tr -d '\r')
+    
+    if [ -z "$redis_password" ]; then
+        print_warning "REDIS_PASSWORD не найден в .env.production, использую значение по умолчанию"
+        redis_password="redis_secret"
+    fi
+    
+    print_info "Проверка подключения к Redis..."
+    
+    # Проверяем текущий пароль
+    if docker exec pigeongram_redis redis-cli -a "$redis_password" PING 2>/dev/null | grep -q "PONG"; then
+        print_success "✅ Redis уже работает с правильным паролем"
+    else
+        print_warning "⚠️ Пароль Redis не совпадает. Перезапускаем с правильным паролем..."
+        
+        # Правильный способ перезапуска с env_file
+        cd "$APP_DIR/repo/docker/postgres"
+        
+        docker-compose stop redis
+        docker-compose rm -f redis
+        docker-compose up -d redis
+        
+        sleep 5
+        
+        # Проверяем снова
+        if docker exec pigeongram_redis redis-cli -a "$redis_password" PING 2>/dev/null | grep -q "PONG"; then
+            print_success "✅ Redis успешно перезапущен с правильным паролем"
+        else
+            print_error "❌ Не удалось настроить Redis. Проверьте пароль в .env.production"
+            echo "Текущий пароль: $redis_password"
+            debug_passwords
+        fi
+    fi
+}
+
+# 👇 Функция синхронизации MinIO
+sync_minio_password() {
+    print_step "Синхронизация пароля MinIO"
+    
+    local minio_password=$(grep MINIO_SECRET_KEY "$APP_DIR/config/.env.production" | cut -d'=' -f2 | tr -d ' ' | tr -d '\n' | tr -d '\r')
+    
+    if [ -z "$minio_password" ]; then
+        print_warning "MINIO_SECRET_KEY не найден в .env.production, использую значение по умолчанию"
+        minio_password="minioadmin"
+    fi
+    
+    print_info "Проверка подключения к MinIO..."
+    
+    # Проверяем доступность MinIO
+    if docker exec pigeongram_minio mc alias set myminio http://localhost:9000 minioadmin "$minio_password" 2>&1 >/dev/null; then
+        print_success "✅ MinIO уже работает с правильным паролем"
+    else
+        print_warning "⚠️ Пароль MinIO не совпадает. Перезапускаем с правильным паролем..."
+        
+        # Правильный способ перезапуска с env_file
+        cd "$APP_DIR/repo/docker/postgres"
+        docker-compose stop minio
+        docker-compose rm -f minio
+        docker-compose up -d minio
+        
+        sleep 10
+        
+        # Проверяем снова
+        if docker exec pigeongram_minio mc alias set myminio http://localhost:9000 minioadmin "$minio_password" 2>&1 >/dev/null; then
+            print_success "✅ MinIO успешно перезапущен с правильным паролем"
+        else
+            print_error "❌ Не удалось настроить MinIO. Проверьте пароль в .env.production"
+            echo "Текущий пароль: $minio_password"
+            debug_passwords
+        fi
     fi
 }
 

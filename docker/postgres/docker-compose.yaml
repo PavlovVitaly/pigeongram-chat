@@ -7,14 +7,13 @@ services:
       dockerfile: Dockerfile
     container_name: pigeongram_postgres
     restart: unless-stopped
+    env_file:
+      - ../../../config/.env.production
     environment:
-      # 👇 ИСПОЛЬЗУЕМ ПЕРЕМЕННЫЕ ИЗ .env С ЗАПАСНЫМИ ЗНАЧЕНИЯМИ
       POSTGRES_USER: ${DB_USER:-pigeongram}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-pigeongram_secret}
       POSTGRES_DB: ${DB_NAME:-pigeongram}
       POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --locale=ru_RU.UTF-8"
-      
-      # Дополнительные настройки PostgreSQL
       POSTGRES_HOST_AUTH_METHOD: scram-sha-256
       PGTZ: Europe/Moscow
     ports:
@@ -48,6 +47,8 @@ services:
     image: dpage/pgadmin4:latest
     container_name: pigeongram_pgadmin
     restart: unless-stopped
+    env_file:
+      - ../../../config/.env.production
     environment:
       PGADMIN_DEFAULT_EMAIL: admin@pigeongram.local
       PGADMIN_DEFAULT_PASSWORD: admin
@@ -71,11 +72,12 @@ services:
     image: redis:7-alpine
     container_name: pigeongram_redis
     restart: unless-stopped
+    env_file:
+      - ../../../config/.env.production
     ports:
       - "6379:6379"
     volumes:
       - redis_data:/data
-    # 👇 ИСПОЛЬЗУЕМ ПЕРЕМЕННУЮ ДЛЯ ПАРОЛЯ
     command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-redis_secret}
     networks:
       - pigeongram_network
@@ -89,8 +91,9 @@ services:
     image: rediscommander/redis-commander:latest
     container_name: pigeongram_redis_commander
     restart: unless-stopped
+    env_file:
+      - ../../../config/.env.production
     environment:
-      # 👇 ИСПОЛЬЗУЕМ ПЕРЕМЕННУЮ ДЛЯ ПАРОЛЯ
       REDIS_HOSTS: local:redis:6379:0:${REDIS_PASSWORD:-redis_secret}
       REDIS_PASSWORD: ${REDIS_PASSWORD:-redis_secret}
     ports:
@@ -105,12 +108,10 @@ services:
     image: minio/minio:latest
     container_name: pigeongram_minio
     restart: unless-stopped
-    ports:
-      - "9000:9000"
-      - "9001:9001"
+    env_file:
+      - ../../../config/.env.production
     environment:
       MINIO_ROOT_USER: minioadmin
-      # 👇 ИСПОЛЬЗУЕМ ПЕРЕМЕННУЮ ДЛЯ ПАРОЛЯ
       MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
       MINIO_DOMAIN: localhost
       MINIO_PROMETHEUS_AUTH_TYPE: "public"
@@ -129,6 +130,8 @@ services:
     build: ../nginx
     container_name: pigeongram_nginx
     restart: unless-stopped
+    env_file:
+      - ../../../config/.env.production
     ports:
       - "80:80"
     networks:
