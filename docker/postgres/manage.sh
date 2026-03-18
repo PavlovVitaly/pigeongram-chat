@@ -47,7 +47,86 @@ ensure_network() {
     fi
 }
 
-# Функция синхронизации пароля с .env
+# 👇 НОВАЯ функция синхронизации пароля Redis
+sync_redis_password() {
+    local env_file="${1:-/opt/pigeongram/config/.env.production}"
+    
+    print_step "Синхронизация пароля Redis"
+    
+    if [ ! -f "$env_file" ]; then
+        print_error "Файл конфигурации не найден: $env_file"
+        return 1
+    fi
+    
+    local redis_password=$(grep REDIS_PASSWORD "$env_file" | cut -d'=' -f2 | tr -d ' ' | tr -d '\n' | tr -d '\r')
+    
+    if [ -z "$redis_password" ]; then
+        print_error "REDIS_PASSWORD не найден в $env_file"
+        return 1
+    fi
+    
+    # Проверяем, запущен ли контейнер
+    if ! docker ps | grep -q pigeongram_redis; then
+        print_error "Контейнер Redis не запущен"
+        return 1
+    fi
+    
+    echo -e "${YELLOW}🔄 Установка пароля Redis...${NC}"
+    
+    # Пробуем установить пароль
+    docker exec pigeongram_redis redis-cli CONFIG SET requirepass "$redis_password" 2>/dev/null
+    
+    if [ $? -eq 0 ]; then
+        # Проверяем, что пароль работает
+        if docker exec pigeongram_redis redis-cli -a "$redis_password" PING 2>/dev/null | grep -q "PONG"; then
+            print_success "✅ Пароль Redis успешно установлен"
+        else
+            print_warning "⚠️ Пароль установлен, но не работает"
+        fi
+    else
+        print_error "❌ Не удалось установить пароль Redis"
+        return 1
+    fi
+}
+
+# 👇 НОВАЯ функция синхронизации пароля MinIO
+sync_minio_password() {
+    local env_file="${1:-/opt/pigeongram/config/.env.production}"
+    
+    print_step "Синхронизация пароля MinIO"
+    
+    if [ ! -f "$env_file" ]; then
+        print_error "Файл конфигурации не найден: $env_file"
+        return 1
+    fi
+    
+    local minio_password=$(grep MINIO_SECRET_KEY "$env_file" | cut -d'=' -f2 | tr -d ' ' | tr -d '\n' | tr -d '\r')
+    
+    if [ -z "$minio_password" ]; then
+        print_error "MINIO_SECRET_KEY не найден в $env_file"
+        return 1
+    fi
+    
+    # Проверяем, запущен ли контейнер
+    if ! docker ps | grep -q pigeongram_minio; then
+        print_error "Контейнер MinIO не запущен"
+        return 1
+    fi
+    
+    echo -e "${YELLOW}🔄 Синхронизация пароля MinIO...${NC}"
+    
+    # Настраиваем алиас с правильным паролем
+    docker exec pigeongram_minio mc alias set myminio http://localhost:9000 minioadmin "$minio_password" 2>/dev/null
+    
+    if [ $? -eq 0 ]; then
+        print_success "✅ Пароль MinIO синхронизирован"
+    else
+        print_warning "⚠️ MinIO запущен, но пароль может отличаться от .env"
+        print_info "   Текущий пароль MinIO: minioadmin (по умолчанию)"
+    fi
+}
+
+# Существующая функция синхронизации пароля PostgreSQL
 sync_password() {
     local env_file="${1:-/opt/pigeongram/config/.env.production}"
     
@@ -131,6 +210,7 @@ check_service() {
     fi
 }
 
+# 👇 ОБНОВЛЕННАЯ функция start
 start() {
     print_step "Запуск контейнеров"
     ensure_network
@@ -148,8 +228,10 @@ start() {
     
     show_status
     
-    # Синхронизируем пароль после запуска
+    # Синхронизируем пароли всех сервисов
     sync_password
+    sync_redis_password
+    sync_minio_password
 }
 
 stop() {
@@ -158,13 +240,18 @@ stop() {
     print_success "Контейнеры остановлены"
 }
 
+# 👇 ОБНОВЛЕННАЯ функция restart
 restart() {
     print_step "Перезапуск контейнеров"
     docker-compose restart
     print_success "Контейнеры перезапущены"
     sleep 5
     show_status
+    
+    # Синхронизируем пароли всех сервисов
     sync_password
+    sync_redis_password
+    sync_minio_password
 }
 
 status() {
@@ -230,7 +317,9 @@ show_help() {
     echo "    restore FILE      - Восстановить из бэкапа"
     echo "    connect           - Подключиться к PostgreSQL"
     echo "    clean             - Остановить и удалить контейнеры"
-    echo "    sync-pass [FILE]  - Синхронизировать пароль с .env файлом"
+    echo "    sync-pass [FILE]  - Синхронизировать пароль PostgreSQL"
+    echo "    sync-redis [FILE] - Синхронизировать пароль Redis"
+    echo "    sync-minio [FILE] - Синхронизировать пароль MinIO"
     echo "    check-all         - Проверить все контейнеры"
     echo "    help              - Показать эту справку"
     echo ""
@@ -271,6 +360,12 @@ case "${1:-help}" in
         ;;
     sync-pass)
         sync_password "$2"
+        ;;
+    sync-redis)
+        sync_redis_password "$2"
+        ;;
+    sync-minio)
+        sync_minio_password "$2"
         ;;
     check-all)
         check_all_containers

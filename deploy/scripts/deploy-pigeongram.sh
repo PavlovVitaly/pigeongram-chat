@@ -146,11 +146,41 @@ debug_passwords() {
     docker ps --format "table {{.Names}}\t{{.Status}}" | grep -E "redis|minio"
 }
 
+# Функция проверки всех контейнеров
+check_all_containers() {
+    print_step "Проверка всех контейнеров"
+    
+    echo "📊 PostgreSQL:"
+    docker ps -a --filter "name=pigeongram_postgres" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || echo "   Не найден"
+    
+    echo ""
+    echo "📊 Redis:"
+    docker ps -a --filter "name=pigeongram_redis" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || echo "   Не найден"
+    
+    echo ""
+    echo "📊 MinIO:"
+    docker ps -a --filter "name=pigeongram_minio" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || echo "   Не найден"
+    
+    echo ""
+    echo "📊 Redis Commander:"
+    docker ps -a --filter "name=pigeongram_redis_commander" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || echo "   Не найден"
+}
+
+# Функция проверки конкретного сервиса
+check_service() {
+    local service=$1
+    if docker ps | grep -q "pigeongram_$service"; then
+        print_success "$service запущен"
+        return 0
+    else
+        print_warning "$service не запущен"
+        return 1
+    fi
+}
+
 # Функция синхронизации пароля PostgreSQL
 sync_postgres_password() {
     print_step "Синхронизация пароля PostgreSQL"
-    
-    sleep 10
     
     local db_password=$(grep DB_PASSWORD "$APP_DIR/config/.env.production" | cut -d'=' -f2 | tr -d ' ' | tr -d '\n' | tr -d '\r')
     
@@ -189,30 +219,28 @@ sync_redis_password() {
     local redis_password=$(grep REDIS_PASSWORD "$APP_DIR/config/.env.production" | cut -d'=' -f2 | tr -d ' ' | tr -d '\n' | tr -d '\r')
     
     if [ -z "$redis_password" ]; then
-        print_warning "REDIS_PASSWORD не найден, использую значение по умолчанию"
-        redis_password="redis_secret"
+        print_error "REDIS_PASSWORD не найден в .env.production"
+        return 1
     fi
     
     print_info "Проверка подключения к Redis..."
     
-    if docker exec pigeongram_redis redis-cli -a "$redis_password" PING 2>/dev/null | grep -q "PONG"; then
-        print_success "✅ Redis уже работает с правильным паролем"
-    else
-        print_warning "⚠️ Пароль Redis не совпадает. Перезапускаем..."
-        
-        cd "$APP_DIR/repo/docker/postgres"
-        docker-compose stop redis
-        docker-compose rm -f redis
-        docker-compose up -d redis
-        
-        sleep 5
-        
+    if ! docker ps | grep -q pigeongram_redis; then
+        print_error "Контейнер Redis не запущен"
+        return 1
+    fi
+    
+    # Пробуем установить пароль
+    docker exec pigeongram_redis redis-cli CONFIG SET requirepass "$redis_password" 2>/dev/null
+    
+    if [ $? -eq 0 ]; then
         if docker exec pigeongram_redis redis-cli -a "$redis_password" PING 2>/dev/null | grep -q "PONG"; then
-            print_success "✅ Redis успешно перезапущен"
+            print_success "✅ Пароль Redis успешно установлен"
         else
-            print_error "❌ Не удалось настроить Redis"
-            debug_passwords
+            print_warning "⚠️ Пароль установлен, но не работает"
         fi
+    else
+        print_warning "⚠️ Не удалось установить пароль Redis"
     fi
 }
 
@@ -223,30 +251,25 @@ sync_minio_password() {
     local minio_password=$(grep MINIO_SECRET_KEY "$APP_DIR/config/.env.production" | cut -d'=' -f2 | tr -d ' ' | tr -d '\n' | tr -d '\r')
     
     if [ -z "$minio_password" ]; then
-        print_warning "MINIO_SECRET_KEY не найден, использую значение по умолчанию"
-        minio_password="minioadmin"
+        print_error "MINIO_SECRET_KEY не найден в .env.production"
+        return 1
     fi
     
     print_info "Проверка подключения к MinIO..."
     
-    if curl -s http://localhost:9000/minio/health/live >/dev/null; then
-        print_success "✅ MinIO уже работает"
+    if ! docker ps | grep -q pigeongram_minio; then
+        print_error "Контейнер MinIO не запущен"
+        return 1
+    fi
+    
+    # Настраиваем алиас с правильным паролем
+    docker exec pigeongram_minio mc alias set myminio http://localhost:9000 minioadmin "$minio_password" 2>/dev/null
+    
+    if [ $? -eq 0 ]; then
+        print_success "✅ Пароль MinIO синхронизирован"
     else
-        print_warning "⚠️ MinIO не отвечает. Перезапускаем..."
-        
-        cd "$APP_DIR/repo/docker/postgres"
-        docker-compose stop minio
-        docker-compose rm -f minio
-        docker-compose up -d minio
-        
-        sleep 10
-        
-        if curl -s http://localhost:9000/minio/health/live >/dev/null; then
-            print_success "✅ MinIO успешно перезапущен"
-        else
-            print_error "❌ Не удалось запустить MinIO"
-            docker logs pigeongram_minio --tail 20
-        fi
+        print_warning "⚠️ MinIO запущен, но пароль может отличаться от .env"
+        print_info "   Текущий пароль MinIO: minioadmin (по умолчанию)"
     fi
 }
 
@@ -389,7 +412,7 @@ deploy_app() {
     fi
     print_success "Репозиторий склонирован"
     
-    # Запуск инфраструктуры через обновленный manage.sh
+    # 👇 ЗАПУСК ИНФРАСТРУКТУРЫ ЧЕРЕЗ ОБНОВЛЕННЫЙ MANAGE.SH
     print_step "Запуск PostgreSQL, Redis и MinIO"
     cd "$APP_DIR/repo/docker/postgres"
     
@@ -397,36 +420,27 @@ deploy_app() {
         chmod +x manage.sh
         ./manage.sh start
         
-        # Дополнительная проверка MinIO
-        print_info "Проверка запуска MinIO..."
+        # Дополнительная проверка всех сервисов
+        print_info "Проверка статуса всех сервисов..."
         sleep 5
         
-        if ! docker ps | grep -q pigeongram_minio; then
-            print_warning "MinIO не запустился, пробуем запустить отдельно..."
-            docker-compose up -d minio
-            sleep 5
-        fi
+        check_service "postgres"
+        check_service "redis"
+        check_service "minio"
         
-        if docker ps | grep -q pigeongram_minio; then
-            print_success "MinIO запущен"
-            curl -s http://localhost:9000/minio/health/live >/dev/null && print_success "MinIO отвечает на запросы"
-        else
-            print_error "MinIO не удалось запустить. Проверьте логи: docker logs pigeongram_minio"
-            docker logs pigeongram_minio --tail 20
-        fi
+        # Явная синхронизация паролей (на всякий случай)
+        sync_redis_password
+        sync_minio_password
     else
         docker-compose up -d
+        sleep 5
+        sync_redis_password
+        sync_minio_password
     fi
     
-    print_success "PostgreSQL, Redis и MinIO запущены"
+    print_success "Инфраструктура запущена и настроена"
     
-    # Синхронизация паролей всех сервисов
-    sleep 10
-    sync_postgres_password
-    sync_redis_password
-    sync_minio_password
-    
-    # Запуск мониторинга
+    # 👇 ЗАПУСК МОНИТОРИНГА
     if [ -d "$APP_DIR/repo/docker/monitoring" ]; then
         print_step "Запуск мониторинга"
         cd "$APP_DIR/repo/docker/monitoring"
@@ -434,7 +448,7 @@ deploy_app() {
         print_success "Мониторинг запущен"
     fi
     
-    # Сборка и запуск приложения
+    # 👇 СБОРКА И ЗАПУСК ПРИЛОЖЕНИЯ
     print_step "Сборка и запуск приложения"
     cd "$APP_DIR/repo"
     
@@ -474,6 +488,13 @@ check_status() {
     else
         echo "   ❌ Конфигурация не найдена"
     fi
+    
+    echo ""
+    echo "🔍 Детальная проверка сервисов:"
+    check_service "postgres"
+    check_service "redis"
+    check_service "minio"
+    check_service "app"
     
     echo ""
     SERVER_IP=$(curl -s ifconfig.me 2>/dev/null || echo "unknown")

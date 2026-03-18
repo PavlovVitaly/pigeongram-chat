@@ -25,3 +25,46 @@ tail -f /tmp/pigeongram-server-*.log
     Балансировка - Nginx распределяет нагрузку
 
     Мониторинг - видно состояние всех серверов
+
+
+
+docker-cleanup.sh
+
+📋 Как использовать
+На локальной машине:
+bash
+
+# Скопируйте скрипт на сервер
+scp docker-cleanup.sh root@your-server:~/
+
+На удаленном сервере:
+bash
+
+# Сделайте скрипт исполняемым
+chmod +x docker-cleanup.sh
+
+# Мягкая очистка (безопасно, удаляет только неиспользуемое)
+./docker-cleanup.sh soft
+
+# Полная очистка всего Docker (осторожно!)
+./docker-cleanup.sh full
+
+# Очистка только PigeonGram
+./docker-cleanup.sh pigeongram
+
+# Показать статистику использования
+./docker-cleanup.sh stats
+
+⚠️ Важные замечания
+Опция	Что делает	Когда использовать
+soft	Удаляет остановленные контейнеры, неиспользуемые образы	Регулярное обслуживание
+full	Удаляет ВСЁ (контейнеры, образы, тома, сети)	Полная переустановка
+pigeongram	Удаляет только ресурсы PigeonGram	Переустановка приложения
+🚀 Быстрые команды
+bash
+
+# Подключиться к серверу и выполнить мягкую очистку
+ssh root@your-server "bash -s" < docker-cleanup.sh soft
+
+# Полная очистка через SSH одной строкой
+ssh root@your-server "docker stop $(docker ps -q) && docker system prune -a -f --volumes"
