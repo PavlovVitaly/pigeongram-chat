@@ -5,6 +5,7 @@ GREEN='\033[0;32m'
 BLUE='\033[0;34m'
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
+PURPLE='\033[0;35m'
 NC='\033[0m'
 
 COMPOSE_FILE="docker-compose.yml"
@@ -34,6 +35,10 @@ print_warning() {
     echo -e "${YELLOW}⚠️ $1${NC}"
 }
 
+print_info() {
+    echo -e "${PURPLE}ℹ️ $1${NC}"
+}
+
 # Функция проверки и создания сети
 ensure_network() {
     local network_name="pigeongram_network"
@@ -47,7 +52,7 @@ ensure_network() {
     fi
 }
 
-# 👇 НОВАЯ функция синхронизации пароля Redis
+# 👇 ИСПРАВЛЕННАЯ функция синхронизации пароля Redis
 sync_redis_password() {
     local env_file="${1:-/opt/pigeongram/config/.env.production}"
     
@@ -71,25 +76,70 @@ sync_redis_password() {
         return 1
     fi
     
-    echo -e "${YELLOW}🔄 Установка пароля Redis...${NC}"
+    # Шаг 1: Проверяем, может уже работает с правильным паролем
+    if docker exec pigeongram_redis redis-cli -a "$redis_password" PING 2>/dev/null | grep -q "PONG"; then
+        print_success "✅ Redis уже работает с правильным паролем"
+        return 0
+    fi
     
-    # Пробуем установить пароль
-    docker exec pigeongram_redis redis-cli CONFIG SET requirepass "$redis_password" 2>/dev/null
+    print_warning "⚠️ Пароль Redis не совпадает. Пробуем восстановить..."
     
-    if [ $? -eq 0 ]; then
-        # Проверяем, что пароль работает
+    # Шаг 2: Пробуем подключиться без пароля (если пароль еще не установлен)
+    if docker exec pigeongram_redis redis-cli PING 2>/dev/null | grep -q "PONG"; then
+        print_info "Redis работает без пароля, устанавливаем..."
+        docker exec pigeongram_redis redis-cli CONFIG SET requirepass "$redis_password"
+        
+        if docker exec pigeongram_redis redis-cli -a "$redis_password" PING 2>/dev/null | grep -q "PONG"; then
+            print_success "✅ Пароль Redis успешно установлен"
+            return 0
+        fi
+    fi
+    
+    # Шаг 3: Пробуем аутентифицироваться с неправильным паролем (чтобы понять текущий статус)
+    if docker exec pigeongram_redis redis-cli AUTH wrongpass 2>&1 | grep -q "ERR AUTH"; then
+        # Значит пароль уже установлен, но другой
+        print_warning "⚠️ В Redis уже установлен другой пароль"
+        
+        # Шаг 4: Перезапускаем Redis без пароля
+        print_info "Перезапускаем Redis без пароля для перенастройки..."
+        
+        # Останавливаем Redis
+        docker-compose stop redis
+        docker-compose rm -f redis
+        
+        # Временно убираем пароль из команды запуска
+        # Создаем временный docker-compose без пароля
+        sed -i 's/--requirepass ${REDIS_PASSWORD:-redis_secret}//' docker-compose.yml
+        docker-compose up -d redis
+        sleep 5
+        
+        # Устанавливаем новый пароль
+        docker exec pigeongram_redis redis-cli CONFIG SET requirepass "$redis_password"
+        
+        # Возвращаем оригинальный docker-compose.yml
+        git checkout docker-compose.yml 2>/dev/null || true
+        
+        # Проверяем
         if docker exec pigeongram_redis redis-cli -a "$redis_password" PING 2>/dev/null | grep -q "PONG"; then
             print_success "✅ Пароль Redis успешно установлен"
         else
-            print_warning "⚠️ Пароль установлен, но не работает"
+            print_error "❌ Не удалось установить пароль Redis"
+            return 1
         fi
     else
-        print_error "❌ Не удалось установить пароль Redis"
-        return 1
+        # Непонятная ситуация, пробуем простой CONFIG SET
+        docker exec pigeongram_redis redis-cli CONFIG SET requirepass "$redis_password" 2>/dev/null
+        
+        if docker exec pigeongram_redis redis-cli -a "$redis_password" PING 2>/dev/null | grep -q "PONG"; then
+            print_success "✅ Пароль Redis установлен"
+        else
+            print_error "❌ Критическая ошибка Redis"
+            return 1
+        fi
     fi
 }
 
-# 👇 НОВАЯ функция синхронизации пароля MinIO
+# 👇 ИСПРАВЛЕННАЯ функция синхронизации пароля MinIO
 sync_minio_password() {
     local env_file="${1:-/opt/pigeongram/config/.env.production}"
     
@@ -113,16 +163,20 @@ sync_minio_password() {
         return 1
     fi
     
-    echo -e "${YELLOW}🔄 Синхронизация пароля MinIO...${NC}"
+    # Проверяем, отвечает ли MinIO
+    if ! curl -s http://localhost:9000/minio/health/live >/dev/null; then
+        print_error "MinIO не отвечает на запросы"
+        return 1
+    fi
     
-    # Настраиваем алиас с правильным паролем
-    docker exec pigeongram_minio mc alias set myminio http://localhost:9000 minioadmin "$minio_password" 2>/dev/null
-    
-    if [ $? -eq 0 ]; then
+    # Пробуем настроить алиас с паролем из .env
+    if docker exec pigeongram_minio mc alias set myminio http://localhost:9000 minioadmin "$minio_password" 2>/dev/null; then
         print_success "✅ Пароль MinIO синхронизирован"
     else
         print_warning "⚠️ MinIO запущен, но пароль может отличаться от .env"
         print_info "   Текущий пароль MinIO: minioadmin (по умолчанию)"
+        print_info "   Для смены пароля выполните:"
+        echo "   docker exec -it pigeongram_minio mc admin user svcacct add --access-key minioadmin --secret-key \"$minio_password\" myminio"
     fi
 }
 
@@ -210,7 +264,6 @@ check_service() {
     fi
 }
 
-# 👇 ОБНОВЛЕННАЯ функция start
 start() {
     print_step "Запуск контейнеров"
     ensure_network
@@ -240,7 +293,6 @@ stop() {
     print_success "Контейнеры остановлены"
 }
 
-# 👇 ОБНОВЛЕННАЯ функция restart
 restart() {
     print_step "Перезапуск контейнеров"
     docker-compose restart
