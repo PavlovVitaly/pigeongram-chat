@@ -30,6 +30,10 @@ print_error() {
     echo -e "${RED}❌ $1${NC}"
 }
 
+print_warning() {
+    echo -e "${YELLOW}⚠️ $1${NC}"
+}
+
 # Функция проверки и создания сети
 ensure_network() {
     local network_name="pigeongram_network"
@@ -95,11 +99,53 @@ sync_password() {
     fi
 }
 
+# Функция проверки всех контейнеров
+check_all_containers() {
+    print_step "Проверка всех контейнеров"
+    
+    echo "📊 PostgreSQL:"
+    docker ps -a --filter "name=pigeongram_postgres" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || echo "   Не найден"
+    
+    echo ""
+    echo "📊 Redis:"
+    docker ps -a --filter "name=pigeongram_redis" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || echo "   Не найден"
+    
+    echo ""
+    echo "📊 MinIO:"
+    docker ps -a --filter "name=pigeongram_minio" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || echo "   Не найден"
+    
+    echo ""
+    echo "📊 Redis Commander:"
+    docker ps -a --filter "name=pigeongram_redis_commander" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || echo "   Не найден"
+}
+
+# Функция проверки конкретного сервиса
+check_service() {
+    local service=$1
+    if docker ps | grep -q "pigeongram_$service"; then
+        print_success "$service запущен"
+        return 0
+    else
+        print_warning "$service не запущен"
+        return 1
+    fi
+}
+
 start() {
     print_step "Запуск контейнеров"
     ensure_network
+    
+    # Запускаем все контейнеры
     docker-compose up -d
+    
     print_success "Контейнеры запущены"
+    sleep 5
+    
+    # Проверяем каждый сервис
+    check_service "postgres"
+    check_service "redis"
+    check_service "minio"
+    
     show_status
     
     # Синхронизируем пароль после запуска
@@ -116,6 +162,7 @@ restart() {
     print_step "Перезапуск контейнеров"
     docker-compose restart
     print_success "Контейнеры перезапущены"
+    sleep 5
     show_status
     sync_password
 }
@@ -126,8 +173,9 @@ status() {
 }
 
 logs() {
-    print_step "Логи PostgreSQL"
-    docker-compose logs --tail=50 -f postgres
+    local service=${1:-postgres}
+    print_step "Логи $service"
+    docker-compose logs --tail=50 -f "$service"
 }
 
 backup() {
@@ -177,17 +225,19 @@ show_help() {
     echo "    stop              - Остановить контейнеры"
     echo "    restart           - Перезапустить контейнеры"
     echo "    status            - Показать статус"
-    echo "    logs              - Показать логи PostgreSQL"
+    echo "    logs [service]    - Показать логи (postgres/redis/minio)"
     echo "    backup            - Создать бэкап БД"
     echo "    restore FILE      - Восстановить из бэкапа"
     echo "    connect           - Подключиться к PostgreSQL"
     echo "    clean             - Остановить и удалить контейнеры"
     echo "    sync-pass [FILE]  - Синхронизировать пароль с .env файлом"
+    echo "    check-all         - Проверить все контейнеры"
     echo "    help              - Показать эту справку"
     echo ""
     echo "  Примеры:"
     echo "    $0 start"
-    echo "    $0 sync-pass /opt/pigeongram/config/.env.production"
+    echo "    $0 logs minio"
+    echo "    $0 check-all"
     echo ""
 }
 
@@ -205,7 +255,7 @@ case "${1:-help}" in
         status
         ;;
     logs)
-        logs
+        logs "$2"
         ;;
     backup)
         backup
@@ -221,6 +271,9 @@ case "${1:-help}" in
         ;;
     sync-pass)
         sync_password "$2"
+        ;;
+    check-all)
+        check_all_containers
         ;;
     help|--help|-h)
         show_help

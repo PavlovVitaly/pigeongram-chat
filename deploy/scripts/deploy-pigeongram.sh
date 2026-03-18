@@ -129,7 +129,7 @@ check_root() {
     fi
 }
 
-# 👇 Функция для отладки паролей
+# Функция для отладки паролей
 debug_passwords() {
     print_step "Отладка паролей"
     
@@ -146,12 +146,10 @@ debug_passwords() {
     docker ps --format "table {{.Names}}\t{{.Status}}" | grep -E "redis|minio"
 }
 
-# 👇 Функция синхронизации пароля PostgreSQL
+# Функция синхронизации пароля PostgreSQL
 sync_postgres_password() {
     print_step "Синхронизация пароля PostgreSQL"
     
-    # Ждем, пока PostgreSQL полностью запустится
-    print_info "Ожидание запуска PostgreSQL..."
     sleep 10
     
     local db_password=$(grep DB_PASSWORD "$APP_DIR/config/.env.production" | cut -d'=' -f2 | tr -d ' ' | tr -d '\n' | tr -d '\r')
@@ -163,91 +161,79 @@ sync_postgres_password() {
     
     print_info "Синхронизируем пароль для пользователя pigeongram..."
     
-    # Пытаемся подключиться и установить пароль
     docker exec -i pigeongram_postgres psql -U postgres -c "ALTER USER pigeongram WITH PASSWORD '$db_password';" 2>/dev/null
     
     if [ $? -eq 0 ]; then
         print_success "Пароль успешно синхронизирован (через postgres)"
     else
-        # Пробуем через пользователя pigeongram
         docker exec -i pigeongram_postgres psql -U pigeongram -d postgres -c "ALTER USER pigeongram WITH PASSWORD '$db_password';" 2>/dev/null
         
         if [ $? -eq 0 ]; then
             print_success "Пароль успешно синхронизирован (через pigeongram)"
         else
             print_warning "Не удалось синхронизировать пароль автоматически"
-            print_info "Возможно, пользователь уже создан с правильным паролем"
         fi
     fi
     
-    # Проверяем подключение
     if docker exec -i pigeongram_postgres psql -U pigeongram -d pigeongram -c "SELECT 1;" 2>/dev/null; then
         print_success "✅ Подключение к PostgreSQL работает"
     else
         print_error "❌ Не удалось подключиться к PostgreSQL"
-        return 1
     fi
 }
 
-# 👇 Функция синхронизации Redis
+# Функция синхронизации Redis
 sync_redis_password() {
     print_step "Синхронизация пароля Redis"
     
     local redis_password=$(grep REDIS_PASSWORD "$APP_DIR/config/.env.production" | cut -d'=' -f2 | tr -d ' ' | tr -d '\n' | tr -d '\r')
     
     if [ -z "$redis_password" ]; then
-        print_warning "REDIS_PASSWORD не найден в .env.production, использую значение по умолчанию"
+        print_warning "REDIS_PASSWORD не найден, использую значение по умолчанию"
         redis_password="redis_secret"
     fi
     
     print_info "Проверка подключения к Redis..."
     
-    # Проверяем текущий пароль
     if docker exec pigeongram_redis redis-cli -a "$redis_password" PING 2>/dev/null | grep -q "PONG"; then
         print_success "✅ Redis уже работает с правильным паролем"
     else
-        print_warning "⚠️ Пароль Redis не совпадает. Перезапускаем с правильным паролем..."
+        print_warning "⚠️ Пароль Redis не совпадает. Перезапускаем..."
         
-        # Правильный способ перезапуска с env_file
         cd "$APP_DIR/repo/docker/postgres"
-        
         docker-compose stop redis
         docker-compose rm -f redis
         docker-compose up -d redis
         
         sleep 5
         
-        # Проверяем снова
         if docker exec pigeongram_redis redis-cli -a "$redis_password" PING 2>/dev/null | grep -q "PONG"; then
-            print_success "✅ Redis успешно перезапущен с правильным паролем"
+            print_success "✅ Redis успешно перезапущен"
         else
-            print_error "❌ Не удалось настроить Redis. Проверьте пароль в .env.production"
-            echo "Текущий пароль: $redis_password"
+            print_error "❌ Не удалось настроить Redis"
             debug_passwords
         fi
     fi
 }
 
-# 👇 Функция синхронизации MinIO
+# Функция синхронизации MinIO
 sync_minio_password() {
     print_step "Синхронизация пароля MinIO"
     
     local minio_password=$(grep MINIO_SECRET_KEY "$APP_DIR/config/.env.production" | cut -d'=' -f2 | tr -d ' ' | tr -d '\n' | tr -d '\r')
     
     if [ -z "$minio_password" ]; then
-        print_warning "MINIO_SECRET_KEY не найден в .env.production, использую значение по умолчанию"
+        print_warning "MINIO_SECRET_KEY не найден, использую значение по умолчанию"
         minio_password="minioadmin"
     fi
     
     print_info "Проверка подключения к MinIO..."
     
-    # Проверяем доступность MinIO
-    if docker exec pigeongram_minio mc alias set myminio http://localhost:9000 minioadmin "$minio_password" 2>&1 >/dev/null; then
-        print_success "✅ MinIO уже работает с правильным паролем"
+    if curl -s http://localhost:9000/minio/health/live >/dev/null; then
+        print_success "✅ MinIO уже работает"
     else
-        print_warning "⚠️ Пароль MinIO не совпадает. Перезапускаем с правильным паролем..."
+        print_warning "⚠️ MinIO не отвечает. Перезапускаем..."
         
-        # Правильный способ перезапуска с env_file
         cd "$APP_DIR/repo/docker/postgres"
         docker-compose stop minio
         docker-compose rm -f minio
@@ -255,13 +241,11 @@ sync_minio_password() {
         
         sleep 10
         
-        # Проверяем снова
-        if docker exec pigeongram_minio mc alias set myminio http://localhost:9000 minioadmin "$minio_password" 2>&1 >/dev/null; then
-            print_success "✅ MinIO успешно перезапущен с правильным паролем"
+        if curl -s http://localhost:9000/minio/health/live >/dev/null; then
+            print_success "✅ MinIO успешно перезапущен"
         else
-            print_error "❌ Не удалось настроить MinIO. Проверьте пароль в .env.production"
-            echo "Текущий пароль: $minio_password"
-            debug_passwords
+            print_error "❌ Не удалось запустить MinIO"
+            docker logs pigeongram_minio --tail 20
         fi
     fi
 }
@@ -270,11 +254,9 @@ sync_minio_password() {
 setup_server() {
     print_step "Установка и настройка сервера"
     
-    # Обновление системы
     apt update && apt upgrade -y
     print_success "Система обновлена"
     
-    # Установка базовых пакетов
     apt install -y \
         curl wget git vim htop net-tools \
         ufw fail2ban unattended-upgrades \
@@ -282,19 +264,16 @@ setup_server() {
         apt-transport-https ca-certificates gnupg lsb-release
     print_success "Базовые пакеты установлены"
     
-    # Установка Docker
     curl -fsSL https://get.docker.com -o get-docker.sh
     sh get-docker.sh
     rm get-docker.sh
     print_success "Docker установлен"
     
-    # Установка Docker Compose
     COMPOSE_VERSION=$(curl -s https://api.github.com/repos/docker/compose/releases/latest | grep 'tag_name' | cut -d\" -f4)
     curl -L "https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
     chmod +x /usr/local/bin/docker-compose
     print_success "Docker Compose ${COMPOSE_VERSION} установлен"
     
-    # Создание пользователя
     if ! id "$APP_USER" &>/dev/null; then
         useradd -m -s /bin/bash "$APP_USER"
         echo "$APP_USER:$(generate_password)" | chpasswd
@@ -304,12 +283,10 @@ setup_server() {
     usermod -aG docker "$APP_USER"
     print_success "Пользователь добавлен в группу docker"
     
-    # Создание структуры директорий
     mkdir -p "$APP_DIR"/{repo,data,logs,backups,ssl,config}
     chown -R "$APP_USER":"$APP_USER" "$APP_DIR"
     print_success "Директории созданы в $APP_DIR"
     
-    # Настройка файрвола
     ufw default deny incoming
     ufw default allow outgoing
     ufw allow 22/tcp comment 'SSH'
@@ -323,7 +300,6 @@ setup_server() {
     echo "y" | ufw enable
     print_success "Файрвол настроен"
     
-    # Настройка fail2ban
     cat > /etc/fail2ban/jail.local << EOF
 [DEFAULT]
 bantime = 3600
@@ -342,7 +318,6 @@ EOF
     systemctl enable fail2ban
     print_success "fail2ban настроен"
     
-    # Настройка swap
     if [ ! -f /swapfile ]; then
         fallocate -l 2G /swapfile
         chmod 600 /swapfile
@@ -352,7 +327,6 @@ EOF
         print_success "Swap файл создан (2GB)"
     fi
     
-    # Оптимизация ядра
     cat >> /etc/sysctl.conf << EOF
 
 # PigeonGram optimizations
@@ -371,20 +345,17 @@ EOF
 deploy_app() {
     print_step "Деплой приложения"
     
-    # Поиск файла конфигурации
     if ! find_env_file; then
         print_error "Не удалось найти файл конфигурации"
         exit 1
     fi
     
-    # Копируем конфигурацию
     print_info "Копирование конфигурации из $ENV_PATH"
     cp "$ENV_PATH" "$APP_DIR/config/.env.production"
     chmod 600 "$APP_DIR/config/.env.production"
     chown "$APP_USER":"$APP_USER" "$APP_DIR/config/.env.production"
     print_success "Конфигурация скопирована"
     
-    # Генерация SSL сертификатов
     if [ ! -f "$APP_DIR/ssl/cert.pem" ]; then
         openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
             -keyout "$APP_DIR/ssl/key.pem" \
@@ -394,7 +365,6 @@ deploy_app() {
         print_success "SSL сертификаты сгенерированы"
     fi
     
-    # Клонирование репозитория
     print_step "Клонирование репозитория"
     cd "$APP_DIR"
     
@@ -419,16 +389,35 @@ deploy_app() {
     fi
     print_success "Репозиторий склонирован"
     
-    # Запуск инфраструктуры
+    # Запуск инфраструктуры через обновленный manage.sh
     print_step "Запуск PostgreSQL, Redis и MinIO"
     cd "$APP_DIR/repo/docker/postgres"
     
     if [ -f "manage.sh" ]; then
         chmod +x manage.sh
         ./manage.sh start
+        
+        # Дополнительная проверка MinIO
+        print_info "Проверка запуска MinIO..."
+        sleep 5
+        
+        if ! docker ps | grep -q pigeongram_minio; then
+            print_warning "MinIO не запустился, пробуем запустить отдельно..."
+            docker-compose up -d minio
+            sleep 5
+        fi
+        
+        if docker ps | grep -q pigeongram_minio; then
+            print_success "MinIO запущен"
+            curl -s http://localhost:9000/minio/health/live >/dev/null && print_success "MinIO отвечает на запросы"
+        else
+            print_error "MinIO не удалось запустить. Проверьте логи: docker logs pigeongram_minio"
+            docker logs pigeongram_minio --tail 20
+        fi
     else
         docker-compose up -d
     fi
+    
     print_success "PostgreSQL, Redis и MinIO запущены"
     
     # Синхронизация паролей всех сервисов
@@ -437,7 +426,7 @@ deploy_app() {
     sync_redis_password
     sync_minio_password
     
-    # Запуск мониторинга (опционально)
+    # Запуск мониторинга
     if [ -d "$APP_DIR/repo/docker/monitoring" ]; then
         print_step "Запуск мониторинга"
         cd "$APP_DIR/repo/docker/monitoring"
@@ -449,14 +438,11 @@ deploy_app() {
     print_step "Сборка и запуск приложения"
     cd "$APP_DIR/repo"
     
-    # Создаем Docker сеть
     docker network inspect pigeongram_network >/dev/null 2>&1 || \
         docker network create pigeongram_network
     
-    # Собираем образ
     docker build -t pigeongram:latest .
     
-    # Запускаем контейнер
     docker stop pigeongram_app 2>/dev/null || true
     docker rm pigeongram_app 2>/dev/null || true
     
@@ -509,13 +495,12 @@ show_help() {
     echo ""
     echo "  Переменные окружения:"
     echo "    DOMAIN          - Домен (по умолчанию: localhost)"
-    echo "    GITHUB_TOKEN    - Токен для доступа к GitHub (для приватных репозиториев)"
+    echo "    GITHUB_TOKEN    - Токен для доступа к GitHub"
     echo "    ENV_FILE        - Путь к файлу .env.production"
     echo ""
     echo "  Примеры:"
     echo "    GITHUB_TOKEN=ghp_xxx ENV_FILE=/home/user/.env.production ./deploy-pigeongram.sh full"
-    echo "    GITHUB_TOKEN=ghp_xxx ./deploy-pigeongram.sh full  # ищет .env.production"
-    echo "    ./deploy-pigeongram.sh app                         # ищет .env.production"
+    echo "    GITHUB_TOKEN=ghp_xxx ./deploy-pigeongram.sh full"
     echo ""
 }
 
