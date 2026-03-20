@@ -14,6 +14,7 @@ type MinIOConfig struct {
 	UploadExpiry    time.Duration
 	DownloadExpiry  time.Duration
 	MaxFileSize     int64
+	PublicEndpoint  string
 }
 
 func NewMinIOConfig() *MinIOConfig {
@@ -27,5 +28,6 @@ func NewMinIOConfig() *MinIOConfig {
 		UploadExpiry:    GetEnvAsDuration("MINIO_UPLOAD_EXPIRY", 15*time.Minute),
 		DownloadExpiry:  GetEnvAsDuration("MINIO_DOWNLOAD_EXPIRY", 24*time.Hour),
 		MaxFileSize:     GetEnvAsInt64("MINIO_MAX_FILE_SIZE", 100<<20), // 100 MB
+		PublicEndpoint:  GetEnv("MINIO_PUBLIC_URL", ""),
 	}
 }

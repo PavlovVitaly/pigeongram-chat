@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -31,6 +32,7 @@ type MinIOClient struct {
 	uploadExpiry   time.Duration
 	downloadExpiry time.Duration
 	maxFileSize    int64
+	publicEndpoint string
 }
 
 func NewMinIOClient(cfg *config.MinIOConfig) (*MinIOClient, error) {
@@ -69,6 +71,7 @@ func NewMinIOClient(cfg *config.MinIOConfig) (*MinIOClient, error) {
 		uploadExpiry:   cfg.UploadExpiry,
 		downloadExpiry: cfg.DownloadExpiry,
 		maxFileSize:    cfg.MaxFileSize,
+		publicEndpoint: cfg.PublicEndpoint,
 	}, nil
 }
 
@@ -92,16 +95,16 @@ func (m *MinIOClient) ListBuckets(ctx context.Context) ([]string, error) {
 }
 
 // GenerateUploadURL создает временную ссылку для загрузки
+// GenerateUploadURL создает временную ссылку для загрузки
 func (m *MinIOClient) GenerateUploadURL(ctx context.Context, chatID, userID, filename string) (string, map[string]string, error) {
 	timestamp := time.Now().Unix()
+	safeFilename := filepath.Base(filename)
 
-	// 👇 Дополнительное экранирование для MinIO
-	safeFilename := filename
-	// MinIO не любит некоторые символы, заменяем их
+	// Очистка имени файла от спецсимволов
 	safeFilename = strings.ReplaceAll(safeFilename, "'", "_")
 	safeFilename = strings.ReplaceAll(safeFilename, "\"", "_")
 	safeFilename = strings.ReplaceAll(safeFilename, "`", "_")
-	safeFilename = strings.ReplaceAll(safeFilename, " ", "_") // пробелы тоже лучше заменить
+	safeFilename = strings.ReplaceAll(safeFilename, " ", "_")
 	safeFilename = strings.ReplaceAll(safeFilename, "?", "_")
 	safeFilename = strings.ReplaceAll(safeFilename, "*", "_")
 	safeFilename = strings.ReplaceAll(safeFilename, ":", "_")
@@ -119,12 +122,23 @@ func (m *MinIOClient) GenerateUploadURL(ctx context.Context, chatID, userID, fil
 	policy.SetExpires(time.Now().Add(m.uploadExpiry))
 	policy.SetContentLengthRange(1, m.maxFileSize)
 
-	url, formData, err := m.client.PresignedPostPolicy(ctx, policy)
+	// Получаем внутренний URL от MinIO клиента
+	internalURL, formData, err := m.client.PresignedPostPolicy(ctx, policy)
 	if err != nil {
 		return "", nil, fmt.Errorf("ошибка создания presigned URL: %w", err)
 	}
 
-	return url.String(), formData, nil
+	// Заменяем внутренний адрес на публичный
+	publicURL := internalURL.String()
+	if m.publicEndpoint != "" {
+		// Заменяем "minio:9000" на публичный адрес
+		publicURL = strings.Replace(publicURL, "minio:9000", m.publicEndpoint, -1)
+		log.Printf("📦 [MinIO] Публичный URL загрузки: %s", publicURL)
+	} else {
+		log.Printf("📦 [MinIO] Внутренний URL загрузки: %s", publicURL)
+	}
+
+	return publicURL, formData, nil
 }
 
 // GenerateDownloadURL - создает ссылку для скачивания

@@ -21,17 +21,19 @@ chmod +x manage.sh
 
 
 
-# Создать бэкап базы данных
-./manage.sh backup
+cd docker/postgres
 
-# Восстановить из бэкапа
-./manage.sh restore backups/pigeongram_20240313_120000.sql
+# Запуск локальных контейнеров
+./manage.sh local start
 
-# Остановить контейнеры (данные сохраняются)
-./manage.sh stop
+# Проверка статуса
+./manage.sh local status
 
-# Полная очистка (удаляет все данные!)
-./manage.sh clean
+# Логи MinIO
+./manage.sh local logs minio
+
+# Остановка
+./manage.sh local stop
 
 # Зайти в pgAdmin
 # Открыть браузер: http://localhost:5050
