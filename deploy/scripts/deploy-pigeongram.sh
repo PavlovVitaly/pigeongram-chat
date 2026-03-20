@@ -184,6 +184,10 @@ EOF
 deploy_app() {
     print_step "Деплой приложения"
     
+    SERVER_IP=$(curl -s ifconfig.me)
+    export SERVER_IP
+    export DOMAIN=${DOMAIN:-$SERVER_IP}
+
     # Поиск конфигурации
     if ! find_env_file; then
         exit 1
