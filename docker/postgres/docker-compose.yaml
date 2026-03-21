@@ -126,6 +126,8 @@ services:
       MINIO_CORS_MAX_AGE: "3000"
     volumes:
       - minio_data:/data
+    networks:
+      - pigeongram_network
     command: server /data --console-address ":9001"
 
   nginx:
