@@ -282,6 +282,9 @@ deploy_app() {
     fi
     
     cd "$APP_DIR/repo/docker/postgres"
+
+    export SERVER_IP
+    print_info "CORS будет разрешать: http://$SERVER_IP:8080"
     
     # Получаем пароли
     REDIS_PASS=$(grep REDIS_PASSWORD "$APP_DIR/config/.env.production" | cut -d'=' -f2 | tr -d ' ' | tr -d '\n' | tr -d '\r')
