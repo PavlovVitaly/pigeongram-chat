@@ -126,7 +126,7 @@ services:
       interval: 30s
       timeout: 20s
       retries: 3
-    command: server /data --console-address ":9001"
+    command: server /data --address ":9000" --console-address ":9001"
 
   nginx:
     build: ../nginx
