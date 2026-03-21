@@ -118,12 +118,6 @@ services:
       MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
       MINIO_DOMAIN: localhost
       MINIO_BROWSER: "on"
-      # 👇 CORS НАСТРОЙКИ
-      MINIO_CORS_ALLOW_ORIGIN: "http://${SERVER_IP:-localhost}:8080,http://localhost:8080"
-      MINIO_CORS_ALLOW_METHODS: "GET,PUT,POST,DELETE,HEAD"
-      MINIO_CORS_ALLOW_HEADERS: "*"
-      MINIO_CORS_EXPOSE_HEADERS: "ETag"
-      MINIO_CORS_MAX_AGE: "3000"
     volumes:
       - minio_data:/data
     networks:
