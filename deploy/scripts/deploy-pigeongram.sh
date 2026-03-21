@@ -180,10 +180,107 @@ EOF
     print_success "Параметры ядра оптимизированы"
 }
 
+# 👇 ФУНКЦИЯ ПРОВЕРКИ И НАСТРОЙКИ NGINX
+setup_nginx_hosts() {
+    print_step "Настройка Nginx hosts"
+    
+    # Проверяем, существует ли контейнер Nginx
+    if docker ps -a | grep -q "pigeongram_nginx"; then
+        print_info "Удаляем старый контейнер Nginx..."
+        docker stop pigeongram_nginx 2>/dev/null || true
+        docker rm pigeongram_nginx 2>/dev/null || true
+    fi
+    
+    # Получаем IP приложения
+    local app_ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' pigeongram_app 2>/dev/null)
+    
+    if [ -z "$app_ip" ]; then
+        print_error "Не удалось получить IP приложения"
+        return 1
+    fi
+    
+    print_info "IP приложения: $app_ip"
+    
+    # Создаём новую конфигурацию Nginx с правильным IP
+    cd "$APP_DIR/repo/docker/nginx"
+    
+    cat > nginx.conf << EOF
+events {
+    worker_connections 1024;
+}
+
+http {
+    upstream app_servers {
+        least_conn;
+        server $app_ip:8080;
+        keepalive 32;
+    }
+
+    server {
+        listen 80;
+        server_name _;
+
+        client_max_body_size 100M;
+
+        location /static/ {
+            proxy_pass http://$app_ip:8080/static/;
+            proxy_set_header Host \$host;
+        }
+
+        location /ws {
+            proxy_pass http://$app_ip:8080/ws;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade \$http_upgrade;
+            proxy_set_header Connection "upgrade";
+            proxy_set_header Host \$host;
+            proxy_read_timeout 300s;
+        }
+
+        location /minio/ {
+            proxy_pass http://minio:9000/;
+            proxy_set_header Host \$host;
+            client_max_body_size 100M;
+            proxy_request_buffering off;
+        }
+
+        location / {
+            proxy_pass http://$app_ip:8080;
+            proxy_set_header Host \$host;
+            proxy_set_header X-Real-IP \$remote_addr;
+        }
+    }
+}
+EOF
+
+    # Собираем и запускаем Nginx
+    cd "$APP_DIR/repo/docker/postgres"
+    docker-compose up -d nginx
+    
+    # Проверяем
+    sleep 3
+    if docker ps | grep -q "pigeongram_nginx"; then
+        print_success "Nginx запущен"
+        
+        # Проверяем, что отвечает
+        if curl -s -o /dev/null -w "%{http_code}" http://localhost | grep -q "200"; then
+            print_success "HTTP сервер отвечает на порту 80"
+        else
+            print_warning "HTTP сервер не отвечает"
+        fi
+    else
+        print_error "Nginx не запустился"
+        docker logs pigeongram_nginx --tail 20
+    fi
+}
+
 # Деплой приложения
 deploy_app() {
     print_step "Деплой приложения"
     
+    # 👇 ОЧИСТКА СТАРОЙ СЕТИ
+    print_info "Очистка старой сети..."
+    docker network rm pigeongram_network 2>/dev/null || true
+
     SERVER_IP=$(curl -s ifconfig.me)
     export SERVER_IP
     export DOMAIN=${DOMAIN:-$SERVER_IP}
@@ -273,7 +370,7 @@ deploy_app() {
     fi
     
     # 👇 ЗАПУСК ИНФРАСТРУКТУРЫ
-    print_step "Запуск PostgreSQL, Redis и MinIO"
+    print_step "Запуск PostgreSQL, Redis, MinIO и Nginx"
     
     if [ ! -d "$APP_DIR/repo/docker/postgres" ]; then
         print_error "Директория docker/postgres не найдена!"
@@ -301,6 +398,23 @@ deploy_app() {
     # Запуск контейнеров
     print_info "Запуск контейнеров..."
     docker-compose up -d
+    
+    # 👇 ПРОВЕРКА NGINX
+    print_info "Проверка Nginx..."
+    sleep 5
+    
+    if docker ps | grep -q "pigeongram_nginx"; then
+        print_success "Nginx запущен"
+        
+        # Проверяем, что Nginx видит приложение (пока приложение ещё не запущено, это нормально)
+        if docker exec pigeongram_nginx ping -c 1 pigeongram_app >/dev/null 2>&1; then
+            print_success "Nginx видит приложение"
+        else
+            print_warning "Nginx не видит приложение (это нормально, приложение ещё не запущено)"
+        fi
+    else
+        print_error "Nginx не запущен"
+    fi
     
     # 👇 ПОДКЛЮЧЕНИЕ КОНТЕЙНЕРОВ К СЕТИ
     print_info "Подключение контейнеров к сети..."
@@ -365,6 +479,9 @@ deploy_app() {
     
     docker build -t pigeongram:latest .
     
+    # Получаем IP приложения для Nginx
+    APP_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' pigeongram_app 2>/dev/null || echo "")
+    
     docker stop pigeongram_app 2>/dev/null || true
     docker rm pigeongram_app 2>/dev/null || true
     
@@ -377,17 +494,57 @@ deploy_app() {
         --env-file "$APP_DIR/config/.env.production" \
         pigeongram:latest
     
-    # Проверка подключения к сети
-    if docker ps | grep -q pigeongram_app; then
-        print_success "Приложение запущено и подключено к сети"
+    # 👇 ЖДЁМ, ПОКА ПРИЛОЖЕНИЕ ЗАПУСТИТСЯ
+    print_info "Ожидание запуска приложения..."
+    sleep 10
+    for i in {1..10}; do
+        if docker ps | grep -q "pigeongram_app.*Up"; then
+            print_success "Приложение запущено"
+            break
+        fi
+        sleep 2
+    done
+
+    setup_nginx_hosts
+    
+    # 👇 ОБНОВЛЯЕМ HOSTS В NGINX (добавляем приложение)
+    if [ -n "$APP_IP" ] && docker ps | grep -q "pigeongram_nginx"; then
+        print_info "Обновляем /etc/hosts в Nginx..."
+        # Добавляем запись (удаляем старую если есть)
+        docker exec --privileged pigeongram_nginx sh -c "sed -i '/pigeongram_app/d' /etc/hosts"
+        docker exec --privileged pigeongram_nginx sh -c "echo '$APP_IP pigeongram_app' >> /etc/hosts"
+        docker restart pigeongram_nginx
+        sleep 2
+        print_success "Nginx обновлён"
     fi
     
     # Финальная проверка
     print_step "Проверка подключений"
     sleep 5
-    docker exec pigeongram_app ping -c 1 postgres >/dev/null 2>&1 && \
-        print_success "Приложение видит PostgreSQL" || \
+    
+    # Проверяем, что приложение видит PostgreSQL
+    if docker exec pigeongram_app ping -c 1 postgres >/dev/null 2>&1; then
+        print_success "Приложение видит PostgreSQL"
+    else
         print_warning "Приложение не видит PostgreSQL"
+    fi
+    
+    # Проверяем, что Nginx видит приложение
+    if docker ps | grep -q "pigeongram_nginx"; then
+        if docker exec pigeongram_nginx ping -c 1 pigeongram_app >/dev/null 2>&1; then
+            print_success "Nginx видит приложение"
+        else
+            print_warning "Nginx не видит приложение"
+        fi
+    fi
+    
+    # Проверяем HTTP доступность
+    if curl -s -o /dev/null -w "%{http_code}" http://localhost | grep -q "200"; then
+        print_success "HTTP сервер отвечает (порт 80)"
+    else
+        print_warning "HTTP сервер не отвечает на порту 80"
+        print_info "Попробуйте: curl -I http://$SERVER_IP"
+    fi
 }
 
 # Проверка статуса

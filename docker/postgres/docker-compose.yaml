@@ -137,6 +137,7 @@ services:
       - ../../../config/.env.production
     ports:
       - "80:80"
+      - "9000:9000"
     networks:
       - pigeongram_network
     depends_on:
