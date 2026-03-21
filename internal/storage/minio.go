@@ -95,7 +95,6 @@ func (m *MinIOClient) ListBuckets(ctx context.Context) ([]string, error) {
 }
 
 // GenerateUploadURL создает временную ссылку для загрузки
-// GenerateUploadURL создает временную ссылку для загрузки
 func (m *MinIOClient) GenerateUploadURL(ctx context.Context, chatID, userID, filename string) (string, map[string]string, error) {
 	timestamp := time.Now().Unix()
 	safeFilename := filepath.Base(filename)
@@ -131,11 +130,10 @@ func (m *MinIOClient) GenerateUploadURL(ctx context.Context, chatID, userID, fil
 	// Заменяем внутренний адрес на публичный
 	publicURL := internalURL.String()
 	if m.publicEndpoint != "" {
-		// Заменяем "minio:9000" на публичный адрес
-		publicURL = strings.Replace(publicURL, "minio:9000", m.publicEndpoint, -1)
-		log.Printf("📦 [MinIO] Публичный URL загрузки: %s", publicURL)
-	} else {
-		log.Printf("📦 [MinIO] Внутренний URL загрузки: %s", publicURL)
+		publicURL = strings.Replace(publicURL, "minio:9000", m.publicEndpoint, 1)
+		if !strings.HasPrefix(publicURL, "http://") && !strings.HasPrefix(publicURL, "https://") {
+			publicURL = "http://" + publicURL
+		}
 	}
 
 	return publicURL, formData, nil
@@ -170,8 +168,18 @@ func (m *MinIOClient) GenerateDownloadURL(ctx context.Context, chatID, objectKey
 		return "", fmt.Errorf("ошибка создания presigned URL: %w", err)
 	}
 
-	log.Printf("✅ [MinIO] Ссылка сгенерирована: %s", presignedURL.String())
-	return presignedURL.String(), nil
+	// 👇 ЗАМЕНЯЕМ ВНУТРЕННИЙ URL НА ПУБЛИЧНЫЙ
+	url := presignedURL.String()
+	if m.publicEndpoint != "" {
+		// Заменяем "minio:9000" на публичный адрес
+		url = strings.Replace(url, "minio:9000", m.publicEndpoint, 1)
+		// Добавляем http:// если нет схемы
+		if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+			url = "http://" + url
+		}
+	}
+
+	return url, nil
 }
 
 // DeleteFile - удаляет файл (ТОЛЬКО ДЛЯ ВЛАДЕЛЬЦА)
