@@ -180,18 +180,16 @@ EOF
     print_success "Параметры ядра оптимизированы"
 }
 
-# 👇 ФУНКЦИЯ ПРОВЕРКИ И НАСТРОЙКИ NGINX
+# Функция настройки Nginx hosts
 setup_nginx_hosts() {
     print_step "Настройка Nginx hosts"
     
-    # Проверяем, существует ли контейнер Nginx
     if docker ps -a | grep -q "pigeongram_nginx"; then
         print_info "Удаляем старый контейнер Nginx..."
         docker stop pigeongram_nginx 2>/dev/null || true
         docker rm pigeongram_nginx 2>/dev/null || true
     fi
     
-    # Получаем IP приложения
     local app_ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' pigeongram_app 2>/dev/null)
     
     if [ -z "$app_ip" ]; then
@@ -201,10 +199,9 @@ setup_nginx_hosts() {
     
     print_info "IP приложения: $app_ip"
     
-    # Создаём новую конфигурацию Nginx с правильным IP
     cd "$APP_DIR/repo/docker/nginx"
     
-    cat > nginx.conf << EOF
+    cat > nginx.conf << 'EOF'
 events {
     worker_connections 1024;
 }
@@ -212,7 +209,7 @@ events {
 http {
     upstream app_servers {
         least_conn;
-        server $app_ip:8080;
+        server pigeongram_app:8080;
         keepalive 32;
     }
 
@@ -223,45 +220,57 @@ http {
         client_max_body_size 100M;
 
         location /static/ {
-            proxy_pass http://$app_ip:8080/static/;
-            proxy_set_header Host \$host;
+            proxy_pass http://pigeongram_app:8080/static/;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
         }
 
         location /ws {
-            proxy_pass http://$app_ip:8080/ws;
+            proxy_pass http://pigeongram_app:8080/ws;
             proxy_http_version 1.1;
-            proxy_set_header Upgrade \$http_upgrade;
+            proxy_set_header Upgrade $http_upgrade;
             proxy_set_header Connection "upgrade";
-            proxy_set_header Host \$host;
+            proxy_set_header Host $host;
             proxy_read_timeout 300s;
         }
 
         location /minio/ {
             proxy_pass http://minio:9000/;
-            proxy_set_header Host \$host;
+            proxy_set_header Host $host;
             client_max_body_size 100M;
             proxy_request_buffering off;
         }
 
         location / {
-            proxy_pass http://$app_ip:8080;
-            proxy_set_header Host \$host;
-            proxy_set_header X-Real-IP \$remote_addr;
+            proxy_pass http://pigeongram_app:8080;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+        }
+    }
+
+    server {
+        listen 9000;
+        server_name _;
+
+        location / {
+            proxy_pass http://minio:9000;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header Authorization $http_authorization;
+            proxy_pass_header Authorization;
+            client_max_body_size 100M;
+            proxy_request_buffering off;
         }
     }
 }
 EOF
 
-    # Собираем и запускаем Nginx
     cd "$APP_DIR/repo/docker/postgres"
     docker-compose up -d nginx
     
-    # Проверяем
     sleep 3
     if docker ps | grep -q "pigeongram_nginx"; then
         print_success "Nginx запущен"
-        
-        # Проверяем, что отвечает
         if curl -s -o /dev/null -w "%{http_code}" http://localhost | grep -q "200"; then
             print_success "HTTP сервер отвечает на порту 80"
         else
@@ -277,7 +286,6 @@ EOF
 deploy_app() {
     print_step "Деплой приложения"
     
-    # 👇 ОЧИСТКА СТАРОЙ СЕТИ
     print_info "Очистка старой сети..."
     docker network rm pigeongram_network 2>/dev/null || true
 
@@ -285,21 +293,17 @@ deploy_app() {
     export SERVER_IP
     export DOMAIN=${DOMAIN:-$SERVER_IP}
 
-    # Поиск конфигурации
     if ! find_env_file; then
         exit 1
     fi
     
-    # Загрузка переменных
     load_env "$ENV_PATH"
     
-    # Копирование конфига
     cp "$ENV_PATH" "$APP_DIR/config/.env.production"
     chmod 600 "$APP_DIR/config/.env.production"
     chown "$APP_USER":"$APP_USER" "$APP_DIR/config/.env.production"
     print_success "Конфигурация скопирована"
     
-    # SSL сертификаты
     if [ ! -f "$APP_DIR/ssl/cert.pem" ]; then
         openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
             -keyout "$APP_DIR/ssl/key.pem" \
@@ -309,11 +313,9 @@ deploy_app() {
         print_success "SSL сертификаты сгенерированы"
     fi
     
-    # 👇 КЛОНИРОВАНИЕ РЕПОЗИТОРИЯ
     print_step "Клонирование репозитория"
     cd "$APP_DIR"
     
-    # Формируем URL
     if [ -n "$GITHUB_TOKEN" ]; then
         GITHUB_URL="https://${GITHUB_USER}:${GITHUB_TOKEN}@github.com/${GITHUB_USER}/${GITHUB_REPO}.git"
     else
@@ -322,13 +324,11 @@ deploy_app() {
     
     print_info "URL: $GITHUB_URL"
     
-    # Проверка переменных
     if [ -z "$GITHUB_USER" ] || [ -z "$GITHUB_REPO" ]; then
         print_error "GITHUB_USER или GITHUB_REPO не заданы"
         exit 1
     fi
     
-    # Клонирование
     if [ -d "repo" ]; then
         if [ -d "repo/.git" ]; then
             print_info "Репозиторий уже существует, обновляем..."
@@ -352,14 +352,12 @@ deploy_app() {
         fi
     fi
     
-    # Проверка результата
     if [ ! -d "$APP_DIR/repo" ]; then
         print_error "Репозиторий не склонирован!"
         exit 1
     fi
     print_success "Репозиторий готов"
     
-    # 👇 СОЗДАНИЕ СЕТИ
     print_step "Настройка сети"
     if docker network inspect pigeongram_network >/dev/null 2>&1; then
         print_success "Сеть pigeongram_network уже существует"
@@ -369,7 +367,6 @@ deploy_app() {
         print_success "Сеть создана"
     fi
     
-    # 👇 ЗАПУСК ИНФРАСТРУКТУРЫ
     print_step "Запуск PostgreSQL, Redis, MinIO и Nginx"
     
     if [ ! -d "$APP_DIR/repo/docker/postgres" ]; then
@@ -383,7 +380,6 @@ deploy_app() {
     export SERVER_IP
     print_info "CORS будет разрешать: http://$SERVER_IP:8080"
     
-    # Получаем пароли
     REDIS_PASS=$(grep REDIS_PASSWORD "$APP_DIR/config/.env.production" | cut -d'=' -f2 | tr -d ' ' | tr -d '\n' | tr -d '\r')
     MINIO_PASS=$(grep MINIO_SECRET_KEY "$APP_DIR/config/.env.production" | cut -d'=' -f2 | tr -d ' ' | tr -d '\n' | tr -d '\r')
     DB_PASS=$(grep DB_PASSWORD "$APP_DIR/config/.env.production" | cut -d'=' -f2 | tr -d ' ' | tr -d '\n' | tr -d '\r')
@@ -391,22 +387,17 @@ deploy_app() {
     print_info "Redis пароль: $REDIS_PASS"
     print_info "MinIO пароль: $MINIO_PASS"
     
-    # Полная очистка
     print_info "Очистка старых данных..."
     docker-compose down -v 2>/dev/null
     
-    # Запуск контейнеров
     print_info "Запуск контейнеров..."
     docker-compose up -d
     
-    # 👇 ПРОВЕРКА NGINX
     print_info "Проверка Nginx..."
     sleep 5
     
     if docker ps | grep -q "pigeongram_nginx"; then
         print_success "Nginx запущен"
-        
-        # Проверяем, что Nginx видит приложение (пока приложение ещё не запущено, это нормально)
         if docker exec pigeongram_nginx ping -c 1 pigeongram_app >/dev/null 2>&1; then
             print_success "Nginx видит приложение"
         else
@@ -416,7 +407,6 @@ deploy_app() {
         print_error "Nginx не запущен"
     fi
     
-    # 👇 ПОДКЛЮЧЕНИЕ КОНТЕЙНЕРОВ К СЕТИ
     print_info "Подключение контейнеров к сети..."
     for container in pigeongram_postgres pigeongram_redis pigeongram_minio; do
         if docker ps | grep -q "$container"; then
@@ -426,14 +416,11 @@ deploy_app() {
         fi
     done
     
-    # Ожидание
     print_info "Ожидание запуска (20 секунд)..."
     sleep 20
     
-    # 👇 НАСТРОЙКА ПАРОЛЕЙ
     print_step "Настройка паролей"
     
-    # Redis
     if [ -n "$REDIS_PASS" ]; then
         print_info "Настройка Redis..."
         docker exec pigeongram_redis redis-cli CONFIG SET requirepass "$REDIS_PASS" 2>/dev/null || \
@@ -444,27 +431,23 @@ deploy_app() {
         fi
     fi
     
-    # MinIO
     if [ -n "$MINIO_PASS" ]; then
         print_info "Настройка MinIO..."
         docker exec pigeongram_minio mc alias set myminio http://localhost:9000 minioadmin "$MINIO_PASS" 2>/dev/null
         print_success "MinIO настроен"
     fi
     
-    # PostgreSQL
     if [ -n "$DB_PASS" ]; then
         print_info "Настройка PostgreSQL..."
         docker exec -i pigeongram_postgres psql -U postgres -c "ALTER USER pigeongram WITH PASSWORD '$DB_PASS';" 2>/dev/null
         print_success "PostgreSQL настроен"
     fi
     
-    # 👇 МОНИТОРИНГ
     if [ -d "$APP_DIR/repo/docker/monitoring" ]; then
         print_step "Запуск мониторинга"
         cd "$APP_DIR/repo/docker/monitoring"
         docker-compose up -d
         
-        # Подключаем мониторинг к сети
         for container in pigeongram_prometheus pigeongram_grafana; do
             if docker ps | grep -q "$container"; then
                 docker network connect pigeongram_network "$container" 2>/dev/null || true
@@ -473,17 +456,27 @@ deploy_app() {
         print_success "Мониторинг запущен"
     fi
     
-    # 👇 ПРИЛОЖЕНИЕ
     print_step "Сборка и запуск приложения"
     cd "$APP_DIR/repo"
     
     docker build -t pigeongram:latest .
     
-    # Получаем IP приложения для Nginx
     APP_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' pigeongram_app 2>/dev/null || echo "")
     
     docker stop pigeongram_app 2>/dev/null || true
     docker rm pigeongram_app 2>/dev/null || true
+    
+    # 👇 ПОЛУЧАЕМ IP ДЛЯ STATIC HOSTS
+    NGINX_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' pigeongram_nginx 2>/dev/null || echo "")
+    MINIO_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' pigeongram_minio 2>/dev/null || echo "")
+    
+    ADD_HOSTS=""
+    if [ -n "$NGINX_IP" ]; then
+        ADD_HOSTS="$ADD_HOSTS --add-host nginx:$NGINX_IP"
+    fi
+    if [ -n "$MINIO_IP" ]; then
+        ADD_HOSTS="$ADD_HOSTS --add-host minio:$MINIO_IP"
+    fi
     
     docker run -d \
         --name pigeongram_app \
@@ -492,9 +485,9 @@ deploy_app() {
         --network pigeongram_network \
         -v "$APP_DIR/logs":/app/logs \
         --env-file "$APP_DIR/config/.env.production" \
+        $ADD_HOSTS \
         pigeongram:latest
     
-    # 👇 ЖДЁМ, ПОКА ПРИЛОЖЕНИЕ ЗАПУСТИТСЯ
     print_info "Ожидание запуска приложения..."
     sleep 10
     for i in {1..10}; do
@@ -507,10 +500,8 @@ deploy_app() {
 
     setup_nginx_hosts
     
-    # 👇 ОБНОВЛЯЕМ HOSTS В NGINX (добавляем приложение)
     if [ -n "$APP_IP" ] && docker ps | grep -q "pigeongram_nginx"; then
         print_info "Обновляем /etc/hosts в Nginx..."
-        # Добавляем запись (удаляем старую если есть)
         docker exec --privileged pigeongram_nginx sh -c "sed -i '/pigeongram_app/d' /etc/hosts"
         docker exec --privileged pigeongram_nginx sh -c "echo '$APP_IP pigeongram_app' >> /etc/hosts"
         docker restart pigeongram_nginx
@@ -518,18 +509,15 @@ deploy_app() {
         print_success "Nginx обновлён"
     fi
     
-    # Финальная проверка
     print_step "Проверка подключений"
     sleep 5
     
-    # Проверяем, что приложение видит PostgreSQL
     if docker exec pigeongram_app ping -c 1 postgres >/dev/null 2>&1; then
         print_success "Приложение видит PostgreSQL"
     else
         print_warning "Приложение не видит PostgreSQL"
     fi
     
-    # Проверяем, что Nginx видит приложение
     if docker ps | grep -q "pigeongram_nginx"; then
         if docker exec pigeongram_nginx ping -c 1 pigeongram_app >/dev/null 2>&1; then
             print_success "Nginx видит приложение"
@@ -538,7 +526,6 @@ deploy_app() {
         fi
     fi
     
-    # Проверяем HTTP доступность
     if curl -s -o /dev/null -w "%{http_code}" http://localhost | grep -q "200"; then
         print_success "HTTP сервер отвечает (порт 80)"
     else
@@ -547,7 +534,6 @@ deploy_app() {
     fi
 }
 
-# Проверка статуса
 check_status() {
     print_step "Проверка статуса"
     echo ""
@@ -562,7 +548,6 @@ check_status() {
     echo -e "\n🌐 Приложение: http://$SERVER_IP:8080"
 }
 
-# Справка
 show_help() {
     print_header "PigeonGram - Полное развертывание"
     echo "  Использование: $0 {full|server|app|status}"
@@ -573,7 +558,6 @@ show_help() {
     echo "    ENV_FILE        - Путь к .env.production"
 }
 
-# Основная логика
 main() {
     case "${1:-help}" in
         full)

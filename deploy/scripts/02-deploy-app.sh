@@ -31,7 +31,6 @@ print_info() {
     echo -e "${PURPLE}ℹ️ $1${NC}"
 }
 
-# Загружаем конфигурацию (включая GitHub токен)
 if [ -f "$PROJECT_ROOT/config/.env.production" ]; then
     source "$PROJECT_ROOT/config/.env.production"
 else
@@ -39,13 +38,11 @@ else
     exit 1
 fi
 
-# GitHub репозиторий из конфигурации
 GIT_REPO="${GITHUB_URL}"
 
 print_step "Начало деплоя PigeonGram"
 print_info "Репозиторий: https://github.com/${GITHUB_USER}/${GITHUB_REPO}"
 
-# 1. Загрузка исходного кода
 print_step "Клонирование/обновление репозитория"
 cd $PROJECT_ROOT
 if [ -d "repo" ]; then
@@ -61,12 +58,10 @@ else
     print_success "Репозиторий склонирован"
 fi
 
-# 2. Копирование конфигурации
 print_step "Настройка конфигурации"
 cp $PROJECT_ROOT/config/.env.production $PROJECT_ROOT/repo/.env
 print_success "Конфигурация скопирована"
 
-# 3. Генерация SSL сертификатов
 print_step "Генерация SSL сертификатов"
 if [ ! -f "$PROJECT_ROOT/ssl/cert.pem" ]; then
     openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
@@ -78,22 +73,18 @@ else
     print_warning "SSL сертификаты уже существуют"
 fi
 
-# 4. Запуск инфраструктуры через manage.sh
 print_step "Запуск PostgreSQL и MinIO"
 cd $PROJECT_ROOT/repo/docker/postgres
 chmod +x manage.sh
 ./manage.sh start
 print_success "PostgreSQL и MinIO запущены через manage.sh"
 
-# 5. Запуск мониторинга
 print_step "Запуск мониторинга"
 cd $PROJECT_ROOT/repo/docker/monitoring
 
-# Создаем файл для токена MinIO
 touch minio-token
 chmod 666 minio-token
 
-# Запускаем мониторинг
 if [ -f "monitor.sh" ]; then
     chmod +x monitor.sh
     ./monitor.sh start
@@ -102,18 +93,26 @@ else
 fi
 print_success "Мониторинг запущен"
 
-# 6. Сборка и запуск приложения
 print_step "Сборка и запуск приложения"
 cd $PROJECT_ROOT/repo
 
-# Создаем Docker сеть если её нет
 docker network inspect pigeongram_network >/dev/null 2>&1 || \
     docker network create pigeongram_network
 
-# Собираем Docker образ
 docker build -t pigeongram:latest .
 
-# Запускаем контейнер
+# 👇 ПОЛУЧАЕМ IP ДЛЯ STATIC HOSTS
+NGINX_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' pigeongram_nginx 2>/dev/null || echo "")
+MINIO_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' pigeongram_minio 2>/dev/null || echo "")
+
+ADD_HOSTS=""
+if [ -n "$NGINX_IP" ]; then
+    ADD_HOSTS="$ADD_HOSTS --add-host nginx:$NGINX_IP"
+fi
+if [ -n "$MINIO_IP" ]; then
+    ADD_HOSTS="$ADD_HOSTS --add-host minio:$MINIO_IP"
+fi
+
 docker run -d \
     --name pigeongram_app \
     --restart unless-stopped \
@@ -121,11 +120,11 @@ docker run -d \
     --network pigeongram_network \
     -v $PROJECT_ROOT/logs:/app/logs \
     --env-file $PROJECT_ROOT/config/.env.production \
+    $ADD_HOSTS \
     pigeongram:latest
 
 print_success "Приложение запущено"
 
-# 7. Настройка автоматического обновления
 print_step "Настройка автоматического обновления"
 cat > /etc/cron.d/pigeongram-update << EOF
 # Автоматическое обновление PigeonGram каждую ночь в 3:00
@@ -134,7 +133,6 @@ EOF
 chmod 644 /etc/cron.d/pigeongram-update
 print_success "Автоматическое обновление настроено"
 
-# 8. Настройка универсального менеджера
 print_step "Настройка универсального менеджера"
 cd $PROJECT_ROOT/scripts
 cp $PROJECT_ROOT/repo/deploy/scripts/07-manage.sh $PROJECT_ROOT/scripts/
@@ -142,7 +140,6 @@ chmod +x 07-manage.sh
 ln -sf $PROJECT_ROOT/scripts/07-manage.sh /usr/local/bin/pigeongram
 print_success "Универсальный менеджер установлен (команда 'pigeongram')"
 
-# 9. Информация о запущенных сервисах
 print_step "Проверка статуса"
 echo ""
 echo "📊 Статус всех сервисов:"
