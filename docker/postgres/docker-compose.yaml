@@ -137,9 +137,6 @@ services:
       - ../nginx/nginx.conf:/etc/nginx/nginx.conf:ro   # 👈 монтируем конфиг
     networks:
       - pigeongram_network
-    depends_on:
-      minio:
-        condition: service_healthy
       
 networks:
   pigeongram_network:
