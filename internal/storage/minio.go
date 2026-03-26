@@ -40,7 +40,7 @@ func NewMinIOClient(cfg *config.MinIOConfig) (*MinIOClient, error) {
 	client, err := minio.New(cfg.Endpoint, &minio.Options{
 		Creds:  credentials.NewStaticV4(cfg.AccessKeyID, cfg.SecretAccessKey, ""),
 		Secure: cfg.UseSSL,
-		// Добавляем транспорт для отладки
+		Region: cfg.Region,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("ошибка подключения к MinIO: %w", err)
