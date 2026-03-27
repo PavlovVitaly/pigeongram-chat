@@ -68,22 +68,3 @@ ssh root@your-server "bash -s" < docker-cleanup.sh soft
 
 # Полная очистка через SSH одной строкой
 ssh root@your-server "docker stop $(docker ps -q) && docker system prune -a -f --volumes"
-
-
-init-server.sh
-📋 Что делает скрипт
-Шаг	Действие
-1	Обновление системы (apt update/upgrade)
-2	Установка базовых пакетов (curl, git, vim, htop, и т.д.)
-3	Установка Docker
-4	Установка Docker Compose
-5	Установка Go 1.26
-6	Создание пользователя app
-7	Настройка фаервола (открыты порты 22,80,443,8080,9000,9001,9090,3000)
-8	Настройка fail2ban для защиты SSH
-9	Настройка автоматических обновлений безопасности
-10	Создание swap файла (2GB)
-11	Оптимизация параметров ядра
-12	Создание директорий /opt/pigeongram/*
-13	Проверка установки
-
