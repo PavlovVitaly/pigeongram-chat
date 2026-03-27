@@ -160,7 +160,7 @@ install_go() {
     fi
     
     # Установка Go 1.26
-    GO_VERSION="1.26.5"
+    GO_VERSION="1.26.1"
     ARCH=$(uname -m)
     
     if [ "$ARCH" = "x86_64" ]; then
