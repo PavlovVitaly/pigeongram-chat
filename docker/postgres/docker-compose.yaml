@@ -6,7 +6,7 @@ services:
     container_name: pigeongram_postgres
     restart: unless-stopped
     env_file:
-      - ../../../config/.env.production
+      - .env.production
     environment:
       POSTGRES_USER: ${DB_USER:-pigeongram}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-pigeongram123}
@@ -28,25 +28,13 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-    deploy:
-      resources:
-        limits:
-          cpus: '1'
-          memory: 512M
-        reservations:
-          memory: 256M
 
   pgadmin:
     image: dpage/pgadmin4:latest
     container_name: pigeongram_pgadmin
     restart: unless-stopped
     env_file:
-      - ../../../config/.env.production
+      - .env.production
     environment:
       PGADMIN_DEFAULT_EMAIL: admin@example.com
       PGADMIN_DEFAULT_PASSWORD: admin
@@ -60,18 +48,13 @@ services:
         condition: service_healthy
     networks:
       - pigeongram_network
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
 
   redis:
     image: redis:7-alpine
     container_name: pigeongram_redis
     restart: unless-stopped
     env_file:
-      - ../../../config/.env.production
+      - .env.production
     ports:
       - "6379:6379"
     volumes:
@@ -90,7 +73,7 @@ services:
     container_name: pigeongram_redis_commander
     restart: unless-stopped
     env_file:
-      - ../../../config/.env.production
+      - .env.production
     environment:
       REDIS_HOSTS: local:redis:6379:0:${REDIS_PASSWORD:-redis123}
       REDIS_PASSWORD: ${REDIS_PASSWORD:-redis123}
@@ -107,7 +90,7 @@ services:
     container_name: pigeongram_minio
     restart: unless-stopped
     env_file:
-      - ../../../config/.env.production
+      - .env.production
     ports:
       - "9000:9000"
       - "9001:9001"
@@ -127,6 +110,41 @@ services:
       retries: 3
     command: server /data --address ":9000" --console-address ":9001"
 
+  app:
+    build: ./repo
+    container_name: pigeongram_app
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./logs:/app/logs
+    env_file:
+      - .env.production
+    networks:
+      - pigeongram_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: ${DB_USER:-pigeongram}
+      DB_PASSWORD: ${DB_PASSWORD:-pigeongram123}
+      DB_NAME: ${DB_NAME:-pigeongram}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-redis123}
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+      MINIO_USE_SSL: "false"
+      MINIO_BUCKET: ${MINIO_BUCKET:-pigeongram-files}
+      MINIO_REGION: ${MINIO_REGION:-us-east-1}
+
   # Nginx закомментирован — MinIO работает напрямую
   # nginx:
   #   image: nginx:alpine
@@ -145,7 +163,7 @@ services:
       
 networks:
   pigeongram_network:
-    driver: bridge    # 👈 создается автоматически
+    driver: bridge
 
 volumes:
   postgres_data:

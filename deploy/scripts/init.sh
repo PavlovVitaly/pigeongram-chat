@@ -41,21 +41,12 @@ cd /opt/pigeongram
 
 # 5. Ожидание готовности
 print_step "Ожидание запуска сервисов..."
-sleep 10
+sleep 15
 
 # 6. Инициализация MinIO
 print_step "Инициализация MinIO"
 chmod +x init-scripts/init-minio.sh
 ./init-scripts/init-minio.sh
-
-# 7. Запуск приложения
-print_step "Запуск приложения"
-cd repo
-docker run -d --name pigeongram_app pigeongram:latest 
-cd ..
-
-# 8. Ожидание запуска приложения
-sleep 10
 
 # 9. Проверка статуса
 print_step "Проверка статуса"
