@@ -191,6 +191,7 @@ func main() {
 		mux.HandleFunc("/api/files/list", fileHandler.ListFiles)
 		mux.HandleFunc("/api/files/download-url", fileHandler.GetDownloadURL)
 		mux.HandleFunc("/api/files/delete", fileHandler.DeleteFile)
+		mux.HandleFunc("/api/files/download", fileHandler.ProxyDownload)
 
 		log.Println("📁 Файловое хранилище активировано с WebSocket уведомлениями")
 		log.Println("   Страница: http://localhost:8080/files?chat_id=general")

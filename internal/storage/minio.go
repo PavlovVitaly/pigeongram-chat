@@ -376,3 +376,15 @@ func (m *MinIOClient) GetFileInfo(ctx context.Context, chatID, objectKey string)
 		Key:         objectKey,
 	}, nil
 }
+
+// GetObject возвращает объект из MinIO для прямого скачивания
+func (m *MinIOClient) GetObject(ctx context.Context, objectKey string) (*minio.Object, error) {
+	log.Printf("📥 [MinIO] Получение объекта: %s", objectKey)
+
+	obj, err := m.client.GetObject(ctx, m.bucketName, objectKey, minio.GetObjectOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("ошибка получения объекта: %w", err)
+	}
+
+	return obj, nil
+}

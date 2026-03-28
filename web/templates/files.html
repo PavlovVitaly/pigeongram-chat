@@ -682,31 +682,10 @@
         
         // ==================== Скачивание файла ====================
         async function downloadFile(key) {
-            console.log('⬇️ Запрос на скачивание:', key);
+            console.log('⬇️ Скачивание файла через прокси:', key);
 
-            try {
-                showToast('🔄 Получение ссылки для скачивания...', 'info');
-
-                // 👇 Важно: правильно кодируем ключ для URL
-                const encodedKey = encodeURIComponent(key);
-                const response = await fetch(`/api/files/download-url?chat_id=${chatId}&key=${encodedKey}`);
-
-                if (!response.ok) {
-                    const errorText = await response.text();
-                    console.error('❌ Ошибка ответа:', response.status, errorText);
-                    throw new Error(errorText || 'Ошибка получения ссылки');
-                }
-
-                const data = await response.json();
-                console.log('✅ Получена ссылка:', data.download_url);
-
-                window.open(data.download_url, '_blank');
-                showToast('✅ Скачивание начато', 'success');
-
-            } catch (err) {
-                console.error('❌ Ошибка скачивания:', err);
-                showToast('❌ ' + err.message, 'error');
-            }
+            // Просто переходим по ссылке - файл придет от сервера напрямую
+            window.location.href = `/api/files/download?chat_id=${chatId}&key=${encodeURIComponent(key)}`;
         }
         
         // ==================== Удаление файла ====================

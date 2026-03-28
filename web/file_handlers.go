@@ -485,3 +485,66 @@ func (h *FileHandler) DebugFileExists(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(result)
 }
+
+// ProxyDownload - проксирует загрузку файла через приложение (обходит проблему с подписью)
+func (h *FileHandler) ProxyDownload(w http.ResponseWriter, r *http.Request) {
+	username := getUserFromSession(r)
+	if username == "" {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	chatID := r.URL.Query().Get("chat_id")
+	objectKey := r.URL.Query().Get("key")
+
+	if chatID == "" || objectKey == "" {
+		http.Error(w, "chat_id and key required", http.StatusBadRequest)
+		return
+	}
+
+	decodedKey, _ := url.QueryUnescape(objectKey)
+
+	log.Printf("📥 [DOWNLOAD] Прокси-скачивание: user=%s, chat=%s, key=%s", username, chatID, decodedKey)
+
+	// Проверка принадлежности чату
+	expectedPrefix := fmt.Sprintf("chat-%s/", chatID)
+	if !strings.HasPrefix(decodedKey, expectedPrefix) {
+		http.Error(w, "File does not belong to this chat", http.StatusForbidden)
+		return
+	}
+
+	// Получаем объект из MinIO
+	obj, err := h.storage.GetObject(r.Context(), decodedKey)
+	if err != nil {
+		log.Printf("❌ [DOWNLOAD] Ошибка получения объекта: %v", err)
+		http.Error(w, "File not found", http.StatusNotFound)
+		return
+	}
+	defer obj.Close()
+
+	// Получаем статистику файла
+	stat, err := obj.Stat()
+
+	// Формируем имя файла
+	filename := filepath.Base(decodedKey)
+	if idx := strings.Index(filename, "-"); idx > 0 {
+		if strings.Trim(filename[:idx], "0123456789") == "" {
+			filename = filename[idx+1:]
+		}
+	}
+	filename = strings.ReplaceAll(filename, "_", " ")
+
+	// Устанавливаем заголовки
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
+	w.Header().Set("Content-Type", "application/octet-stream")
+
+	if err == nil {
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", stat.Size))
+		log.Printf("✅ [DOWNLOAD] Отправка: %s (размер: %d)", filename, stat.Size)
+	} else {
+		log.Printf("✅ [DOWNLOAD] Отправка: %s (размер неизвестен)", filename)
+	}
+
+	// Отправляем файл
+	http.ServeContent(w, r, filename, time.Now(), obj)
+}
