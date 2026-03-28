@@ -6,7 +6,7 @@ services:
     container_name: pigeongram_postgres
     restart: unless-stopped
     env_file:
-      - .env.production
+      - ../../../config/.env.production
     environment:
       POSTGRES_USER: ${DB_USER:-pigeongram}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-pigeongram123}
@@ -34,7 +34,7 @@ services:
     container_name: pigeongram_pgadmin
     restart: unless-stopped
     env_file:
-      - .env.production
+      - ../../../config/.env.production
     environment:
       PGADMIN_DEFAULT_EMAIL: admin@example.com
       PGADMIN_DEFAULT_PASSWORD: admin
@@ -54,7 +54,7 @@ services:
     container_name: pigeongram_redis
     restart: unless-stopped
     env_file:
-      - .env.production
+      - ../../../config/.env.production
     ports:
       - "6379:6379"
     volumes:
@@ -73,7 +73,7 @@ services:
     container_name: pigeongram_redis_commander
     restart: unless-stopped
     env_file:
-      - .env.production
+      - ../../../config/.env.production
     environment:
       REDIS_HOSTS: local:redis:6379:0:${REDIS_PASSWORD:-redis123}
       REDIS_PASSWORD: ${REDIS_PASSWORD:-redis123}
@@ -90,7 +90,7 @@ services:
     container_name: pigeongram_minio
     restart: unless-stopped
     env_file:
-      - .env.production
+      - ../../../config/.env.production
     ports:
       - "9000:9000"
       - "9001:9001"
@@ -119,7 +119,7 @@ services:
     volumes:
       - ./logs:/app/logs
     env_file:
-      - .env.production
+      - ../../../config/.env.production
     networks:
       - pigeongram_network
     depends_on:
