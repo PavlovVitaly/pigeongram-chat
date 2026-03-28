@@ -111,7 +111,7 @@ services:
     command: server /data --address ":9000" --console-address ":9001"
 
   app:
-    build: ./repo
+    build: ../../
     container_name: pigeongram_app
     restart: unless-stopped
     ports:
