@@ -127,25 +127,17 @@ func (m *MinIOClient) GenerateUploadURL(ctx context.Context, chatID, userID, fil
 		return "", nil, fmt.Errorf("ошибка создания presigned URL: %w", err)
 	}
 
-	// Формируем публичный URL
-	publicURL := internalURL.String()
+	// Нормализуем публичный эндпоинт
+	publicURL := normalizePublicEndpoint(m.publicEndpoint)
 
-	if m.publicEndpoint != "" {
-		// Очищаем публичный эндпоинт от лишних слешей и протокола
-		cleanEndpoint := strings.TrimSuffix(m.publicEndpoint, "/")
-		cleanEndpoint = strings.TrimPrefix(cleanEndpoint, "http://")
-		cleanEndpoint = strings.TrimPrefix(cleanEndpoint, "https://")
-
-		// Заменяем внутренний хост на публичный
-		publicURL = strings.Replace(publicURL, internalURL.Host, cleanEndpoint, 1)
-
-		// Добавляем протокол, если его нет
-		if !strings.HasPrefix(publicURL, "http://") && !strings.HasPrefix(publicURL, "https://") {
-			publicURL = "http://" + publicURL
-		}
+	if publicURL != nil {
+		// Заменяем хост на публичный
+		internalURL.Host = publicURL.Host
+		// Сохраняем схему (http/https) из публичного эндпоинта
+		internalURL.Scheme = publicURL.Scheme
 	}
 
-	return publicURL, formData, nil
+	return internalURL.String(), formData, nil
 }
 
 // GenerateDownloadURL - создает ссылку для скачивания
@@ -177,18 +169,63 @@ func (m *MinIOClient) GenerateDownloadURL(ctx context.Context, chatID, objectKey
 		return "", fmt.Errorf("ошибка создания presigned URL: %w", err)
 	}
 
-	// 👇 ЗАМЕНЯЕМ ВНУТРЕННИЙ URL НА ПУБЛИЧНЫЙ
-	url := presignedURL.String()
-	if m.publicEndpoint != "" {
-		// Заменяем "minio:9000" на публичный адрес
-		url = strings.Replace(url, "minio:9000", m.publicEndpoint, 1)
-		// Добавляем http:// если нет схемы
-		if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
-			url = "http://" + url
-		}
+	// Нормализуем публичный эндпоинт
+	publicURL := normalizePublicEndpoint(m.publicEndpoint)
+
+	if publicURL != nil {
+		// Заменяем хост на публичный
+		presignedURL.Host = publicURL.Host
+		// Сохраняем схему (http/https) из публичного эндпоинта
+		presignedURL.Scheme = publicURL.Scheme
 	}
 
-	return url, nil
+	urlStr := presignedURL.String()
+	log.Printf("✅ [MinIO] Ссылка сгенерирована: %s", urlStr)
+
+	return urlStr, nil
+}
+
+// normalizePublicEndpoint нормализует публичный эндпоинт
+// Поддерживает форматы:
+//   - "92.255.108.89:9000"
+//   - "http://92.255.108.89:9000"
+//   - "https://92.255.108.89:9000"
+//   - "http://92.255.108.89:9000/"
+//   - "92.255.108.89:9000/"
+func normalizePublicEndpoint(endpoint string) *url.URL {
+	if endpoint == "" {
+		return nil
+	}
+
+	// Добавляем протокол если его нет
+	if !strings.HasPrefix(endpoint, "http://") && !strings.HasPrefix(endpoint, "https://") {
+		endpoint = "http://" + endpoint
+	}
+
+	// Убираем лишние слеши в конце
+	endpoint = strings.TrimSuffix(endpoint, "/")
+
+	// Парсим URL
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		log.Printf("⚠️ [MinIO] Ошибка парсинга publicEndpoint '%s': %v", endpoint, err)
+		return nil
+	}
+
+	return parsed
+}
+
+// replaceHostInURL заменяет хост в URL на публичный
+func replaceHostInURL(originalURL *url.URL, publicHost string) string {
+	if publicHost == "" {
+		return originalURL.String()
+	}
+
+	// Создаем копию URL
+	result := *originalURL
+	result.Host = publicHost
+
+	return result.String()
 }
 
 // DeleteFile - удаляет файл (ТОЛЬКО ДЛЯ ВЛАДЕЛЬЦА)
