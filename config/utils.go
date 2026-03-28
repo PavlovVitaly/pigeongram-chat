@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"time"
@@ -54,4 +55,15 @@ func GetEnvAsDuration(key string, defaultValue time.Duration) time.Duration {
 
 func GetServerEnvironment() string {
 	return GetEnv("SERVER_ENVIRONMENT", "development")
+}
+
+// GetPublicURL возвращает публичный URL приложения
+func GetPublicURL() string {
+	domain := GetEnv("DOMAIN", "localhost")
+	port := GetEnv("NGINX_PORT", "80")
+
+	if port == "80" || port == "443" {
+		return fmt.Sprintf("http://%s", domain)
+	}
+	return fmt.Sprintf("http://%s:%s", domain, port)
 }
