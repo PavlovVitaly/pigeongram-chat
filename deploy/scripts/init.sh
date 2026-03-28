@@ -35,7 +35,9 @@ cd ..
 
 # 4. Запуск инфраструктуры
 print_step "Запуск инфраструктуры (PostgreSQL, Redis, MinIO)"
-docker-compose up -d postgres redis minio
+cd /opt/pigeongram/repo/docker/postgres/
+docker-compose up -d 
+cd /opt/pigeongram
 
 # 5. Ожидание готовности
 print_step "Ожидание запуска сервисов..."
@@ -48,20 +50,17 @@ chmod +x init-scripts/init-minio.sh
 
 # 7. Запуск приложения
 print_step "Запуск приложения"
-docker-compose up -d app
+cd repo
+docker run -d --name pigeongram_app pigeongram:latest 
+cd ..
 
 # 8. Ожидание запуска приложения
 sleep 10
 
 # 9. Проверка статуса
 print_step "Проверка статуса"
+cd /opt/pigeongram/repo/docker/postgres/
 docker-compose ps
-
-# 10. Проверка страницы файлов
-print_step "Проверка страницы файлов"
-curl -s -o /dev/null -w "Страница файлов: %{http_code}\n" http://92.255.108.89/files?chat_id=general
+cd /opt/pigeongram
 
 print_success "Развертывание завершено!"
-print_info "Чат: http://92.255.108.89/chat"
-print_info "Файлы: http://92.255.108.89/files?chat_id=general"
-print_info "MinIO Console: http://92.255.108.89:9001 (minioadmin/minioadmin)"
