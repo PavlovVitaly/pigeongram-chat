@@ -127,10 +127,19 @@ func (m *MinIOClient) GenerateUploadURL(ctx context.Context, chatID, userID, fil
 		return "", nil, fmt.Errorf("ошибка создания presigned URL: %w", err)
 	}
 
-	// Заменяем внутренний адрес на публичный
+	// Формируем публичный URL
 	publicURL := internalURL.String()
+
 	if m.publicEndpoint != "" {
-		publicURL = strings.Replace(publicURL, "minio:9000", m.publicEndpoint, 1)
+		// Очищаем публичный эндпоинт от лишних слешей и протокола
+		cleanEndpoint := strings.TrimSuffix(m.publicEndpoint, "/")
+		cleanEndpoint = strings.TrimPrefix(cleanEndpoint, "http://")
+		cleanEndpoint = strings.TrimPrefix(cleanEndpoint, "https://")
+
+		// Заменяем внутренний хост на публичный
+		publicURL = strings.Replace(publicURL, internalURL.Host, cleanEndpoint, 1)
+
+		// Добавляем протокол, если его нет
 		if !strings.HasPrefix(publicURL, "http://") && !strings.HasPrefix(publicURL, "https://") {
 			publicURL = "http://" + publicURL
 		}
