@@ -152,6 +152,7 @@ services:
       # - "443:443"  # Для HTTPS (потребуется SSL сертификат)
     volumes:
       - ../nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - nginx_cache:/var/cache/nginx  # том для кэша
       # - ./nginx/ssl:/etc/nginx/ssl:ro  # Для HTTPS (опционально)
     networks:
       - pigeongram_network
@@ -172,3 +173,5 @@ volumes:
     name: pigeongram_redis_data
   minio_data:
     name: pigeongram_minio_data
+  nginx_cache:
+    name: pigeongram_nginx_cache
