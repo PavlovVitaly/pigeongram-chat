@@ -15,7 +15,7 @@ services:
       - '--web.console.libraries=/usr/share/prometheus/console_libraries'
       - '--web.console.templates=/usr/share/prometheus/consoles'
     networks:
-      - pigeongram_network
+      - postgres_pigeongram_network 
 
   grafana:
     image: grafana/grafana:latest
@@ -33,7 +33,7 @@ services:
     depends_on:
       - prometheus
     networks:
-      - pigeongram_network
+      - postgres_pigeongram_network
 
   node-exporter:
     image: prom/node-exporter:latest
@@ -51,7 +51,7 @@ services:
       - '--path.rootfs=/rootfs'
       - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
     networks:
-      - pigeongram_network
+      - postgres_pigeongram_network
 
   cadvisor:
     image: gcr.io/cadvisor/cadvisor:latest
@@ -67,7 +67,7 @@ services:
       - /dev/disk/:/dev/disk:ro
     privileged: true
     networks:
-      - pigeongram_network
+      - postgres_pigeongram_network
 
   redis-exporter:
     image: oliver006/redis_exporter:latest
@@ -79,7 +79,7 @@ services:
       REDIS_ADDR: redis://redis:6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:-redis_secret}
     networks:
-      - pigeongram_network
+      - postgres_pigeongram_network
 
   postgres-exporter:
     image: prometheuscommunity/postgres-exporter:latest
@@ -90,7 +90,7 @@ services:
     environment:
       DATA_SOURCE_NAME: "postgresql://${DB_USER:-pigeongram}:${DB_PASSWORD:-pigeongram_secret}@postgres:5432/${DB_NAME:-pigeongram}?sslmode=disable"
     networks:
-      - pigeongram_network
+      - postgres_pigeongram_network
 
 volumes:
   prometheus_data:
@@ -99,5 +99,5 @@ volumes:
     name: pigeongram_grafana_data
 
 networks:
-  pigeongram_network:
+  postgres_pigeongram_network:
     external: true

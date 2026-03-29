@@ -48,7 +48,13 @@ print_step "Инициализация MinIO"
 chmod +x init-scripts/init-minio.sh
 ./init-scripts/init-minio.sh
 
-# 9. Проверка статуса
+# 7. Запуск инфраструктуры
+print_step "Запуск инфраструктуры для мониторинга"
+cd /opt/pigeongram/repo/docker/monitoring/
+docker-compose up -d 
+cd /opt/pigeongram
+
+# 8. Проверка статуса
 print_step "Проверка статуса"
 cd /opt/pigeongram/repo/docker/postgres/
 docker-compose ps
