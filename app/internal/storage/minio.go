@@ -122,27 +122,31 @@ func (m *MinIOClient) GenerateUploadURL(ctx context.Context, chatID, userID, fil
 	policy.SetContentLengthRange(1, m.maxFileSize)
 
 	// Получаем внутренний URL от MinIO клиента
-	internalURL, formData, err := m.client.PresignedPostPolicy(ctx, policy)
+	_, formData, err := m.client.PresignedPostPolicy(ctx, policy)
 	if err != nil {
 		return "", nil, fmt.Errorf("ошибка создания presigned URL: %w", err)
 	}
 
-	// Нормализуем публичный эндпоинт
-	publicURL := normalizePublicEndpoint(m.publicEndpoint)
-
+	// Формируем правильный публичный URL
 	var uploadURL string
-	if publicURL != nil {
-		// Собираем URL вручную, чтобы правильно сформировать путь
-		uploadURL = fmt.Sprintf("%s://%s/%s/", publicURL.Scheme, publicURL.Host, m.bucketName)
+	if m.publicEndpoint != "" {
+		// Очищаем публичный эндпоинт
+		publicEndpoint := m.publicEndpoint
+		if !strings.HasPrefix(publicEndpoint, "http://") && !strings.HasPrefix(publicEndpoint, "https://") {
+			publicEndpoint = "http://" + publicEndpoint
+		}
+		publicEndpoint = strings.TrimSuffix(publicEndpoint, "/")
+
+		// Формируем URL для загрузки через Nginx
+		uploadURL = fmt.Sprintf("%s/minio/%s/", publicEndpoint, m.bucketName)
 	} else {
-		uploadURL = internalURL.String()
+		uploadURL = fmt.Sprintf("http://localhost:9000/%s/", m.bucketName)
 	}
 
 	log.Printf("📤 [MinIO] Upload URL: %s", uploadURL)
 	return uploadURL, formData, nil
 }
 
-// GenerateDownloadURL - создает ссылку для скачивания
 // GenerateDownloadURL - создает ссылку для скачивания
 func (m *MinIOClient) GenerateDownloadURL(ctx context.Context, chatID, objectKey string) (string, error) {
 	log.Printf("🔍 [MinIO] Генерация ссылки на скачивание: bucket=%s, key=%s",
@@ -172,22 +176,19 @@ func (m *MinIOClient) GenerateDownloadURL(ctx context.Context, chatID, objectKey
 		return "", fmt.Errorf("ошибка создания presigned URL: %w", err)
 	}
 
-	// Нормализуем публичный эндпоинт
-	publicURL := normalizePublicEndpoint(m.publicEndpoint)
-
+	// Формируем правильный публичный URL
 	var downloadURL string
-	if publicURL != nil {
-		// Собираем URL вручную
-		// Формат: http://public-host/minio/bucket-name/object-key?params
-		baseURL := fmt.Sprintf("%s://%s/minio/%s/%s",
-			publicURL.Scheme, publicURL.Host, m.bucketName, objectKey)
-
-		// Добавляем параметры
-		if len(reqParams) > 0 {
-			baseURL = baseURL + "?" + reqParams.Encode()
+	if m.publicEndpoint != "" {
+		// Очищаем публичный эндпоинт
+		publicEndpoint := m.publicEndpoint
+		if !strings.HasPrefix(publicEndpoint, "http://") && !strings.HasPrefix(publicEndpoint, "https://") {
+			publicEndpoint = "http://" + publicEndpoint
 		}
+		publicEndpoint = strings.TrimSuffix(publicEndpoint, "/")
 
-		downloadURL = baseURL
+		// Формируем URL для скачивания через Nginx
+		downloadURL = fmt.Sprintf("%s/minio/%s/%s?%s",
+			publicEndpoint, m.bucketName, objectKey, reqParams.Encode())
 	} else {
 		downloadURL = presignedURL.String()
 	}
