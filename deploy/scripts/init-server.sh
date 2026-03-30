@@ -375,7 +375,7 @@ EOF
 create_directories() {
     print_step "Создание директорий для проекта"
     
-    mkdir -p /opt/pigeongram/{repo,data,logs,backups,ssl,config,scripts,init-scripts}
+    mkdir -p /opt/pigeongram
     chown -R app:app /opt/pigeongram
     chmod 755 /opt/pigeongram
     
@@ -429,12 +429,7 @@ main() {
     verify_installation
     
     print_header "Инициализация завершена!"
-    echo ""
-    echo "📋 Следующие шаги:"
-    echo "   1. Скопируйте проект в /opt/pigeongram/repo"
-    echo "   2. Создайте .env.production в /opt/pigeongram/"
-    echo "   3. Запустите docker-compose up -d"
-    echo ""
+
     echo "🔧 Команды для проверки:"
     echo "   docker ps                     # статус контейнеров"
     echo "   docker-compose logs -f        # логи"

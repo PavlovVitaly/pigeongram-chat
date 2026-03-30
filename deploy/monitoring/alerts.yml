@@ -1,0 +1,4 @@
+groups:
+  - name: pigeongram_alerts
+    interval: 30s
+    rules: []
