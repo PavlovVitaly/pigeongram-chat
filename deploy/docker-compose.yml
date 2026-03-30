@@ -138,7 +138,7 @@ services:
       MINIO_USE_SSL: "false"
       MINIO_BUCKET: ${MINIO_BUCKET:-pigeongram-files}
       MINIO_REGION: ${MINIO_REGION:-us-east-1}
-      MINIO_PUBLIC_URL: http://${DOMAIN:-localhost}
+      MINIO_PUBLIC_URL: http://${MINIO_PUBLIC_URL:-45.8.97.91}
 
   # ========== NGINX ==========
   nginx:
