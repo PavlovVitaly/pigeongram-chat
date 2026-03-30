@@ -18,14 +18,14 @@ sudo systemctl list-timers | grep minio
 Ручное обновление токена (для теста)
 bash
 
-cd docker/monitoring
+cd docker_local/monitoring
 ./scripts/update-minio-token.sh
 
 Проверка работы
 bash
 
 # Проверить наличие токена
-cat docker/monitoring/minio-token
+cat docker_local/monitoring/minio-token
 
 # Проверить логи обновления
 docker logs pigeongram_prometheus --tail 50

@@ -5,7 +5,7 @@ Requires=docker.service
 
 [Service]
 Type=oneshot
-ExecStart=/path/to/pigeongram/app/docker/monitoring/scripts/update-minio-token.sh
+ExecStart=/path/to/pigeongram/app/docker_local/monitoring/scripts/update-minio-token.sh
 User=root
 Group=root
 

@@ -4,7 +4,7 @@ echo "🧹 Полная очистка всех данных PigeonGram"
 
 # 1. Очистка PostgreSQL
 echo "📦 Очистка PostgreSQL..."
-cd docker/postgres
+cd docker_local/postgres
 docker-compose exec -T postgres psql -U pigeongram -d pigeongram -c "TRUNCATE messages RESTART IDENTITY CASCADE;"
 docker-compose exec -T postgres psql -U pigeongram -d pigeongram -c "DELETE FROM users WHERE username IN ('test', 'admin');"
 

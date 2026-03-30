@@ -1,5 +1,5 @@
 # Перейти в папку с Docker-файлами
-cd docker/postgres
+cd docker_local/postgres
 
 # Дать права на выполнение скрипта
 chmod +x manage.sh
@@ -21,7 +21,7 @@ chmod +x manage.sh
 
 
 
-cd docker/postgres
+cd docker_local/postgres
 
 # Запуск локальных контейнеров
 ./manage.sh local start
@@ -58,7 +58,7 @@ cd docker/postgres
     
     
 # Подключиться к PostgreSQL
-cd docker/postgres
+cd docker_local/postgres
 ./manage.sh connect
 
 # Проверить данные
