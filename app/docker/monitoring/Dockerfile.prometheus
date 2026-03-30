@@ -1,0 +1,20 @@
+FROM prom/prometheus:latest
+
+# Создаем директорию для токена
+USER root
+RUN mkdir -p /etc/prometheus
+
+# Копируем конфигурацию
+COPY prometheus.yml /etc/prometheus/prometheus.yml
+COPY alerts.yml /etc/prometheus/alerts.yml
+
+# Копируем скрипт и делаем его исполняемым (более простой способ)
+COPY scripts/update-minio-token.sh /usr/local/bin/update-minio-token.sh
+
+# Возвращаемся к пользователю prometheus
+USER nobody
+
+WORKDIR /prometheus
+
+ENTRYPOINT ["/bin/prometheus"]
+CMD ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.path=/prometheus", "--web.console.libraries=/usr/share/prometheus/console_libraries", "--web.console.templates=/usr/share/prometheus/consoles", "--web.enable-lifecycle"]

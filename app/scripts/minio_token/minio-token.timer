@@ -1,0 +1,10 @@
+[Unit]
+Description=Run MinIO token updater every hour
+Requires=minio-token.service
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+
+[Install]
+WantedBy=timers.target

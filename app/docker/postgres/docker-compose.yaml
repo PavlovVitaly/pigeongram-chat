@@ -1,0 +1,177 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: pigeongram_postgres
+    restart: unless-stopped
+    env_file:
+      - ../../../config/.env.production
+    environment:
+      POSTGRES_USER: ${DB_USER:-pigeongram}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-pigeongram123}
+      POSTGRES_DB: ${DB_NAME:-pigeongram}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --locale=ru_RU.UTF-8"
+      POSTGRES_HOST_AUTH_METHOD: scram-sha-256
+      PGTZ: Europe/Moscow
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backups:/backups
+      - ./logs:/var/log/postgresql
+    networks:
+      - pigeongram_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-pigeongram} -d ${DB_NAME:-pigeongram}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: pigeongram_pgadmin
+    restart: unless-stopped
+    env_file:
+      - ../../../config/.env.production
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@example.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - pigeongram_network
+
+  redis:
+    image: redis:7-alpine
+    container_name: pigeongram_redis
+    restart: unless-stopped
+    env_file:
+      - ../../../config/.env.production
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-redis123}
+    networks:
+      - pigeongram_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-redis123}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: pigeongram_redis_commander
+    restart: unless-stopped
+    env_file:
+      - ../../../config/.env.production
+    environment:
+      REDIS_HOSTS: local:redis:6379:0:${REDIS_PASSWORD:-redis123}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-redis123}
+    ports:
+      - "8081:8081"
+    networks:
+      - pigeongram_network
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  minio:
+    image: minio/minio:latest
+    container_name: pigeongram_minio
+    restart: unless-stopped
+    env_file:
+      - ../../../config/.env.production
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_DOMAIN: localhost
+      MINIO_BROWSER: "on"
+    volumes:
+      - minio_data:/data
+    networks:
+      - pigeongram_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    command: server /data --address ":9000" --console-address ":9001"
+
+  app:
+    build: ../../
+    container_name: pigeongram_app
+    restart: unless-stopped
+    volumes:
+      - ./logs:/app/logs
+    env_file:
+      - ../../../config/.env.production
+    networks:
+      - pigeongram_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: ${DB_USER:-pigeongram}
+      DB_PASSWORD: ${DB_PASSWORD:-pigeongram123}
+      DB_NAME: ${DB_NAME:-pigeongram}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-redis123}
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+      MINIO_USE_SSL: "false"
+      MINIO_BUCKET: ${MINIO_BUCKET:-pigeongram-files}
+      MINIO_REGION: ${MINIO_REGION:-us-east-1}
+
+  nginx:
+    image: nginx:alpine
+    container_name: pigeongram_nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      # - "443:443"  # Для HTTPS (потребуется SSL сертификат)
+    volumes:
+      - ../nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - nginx_cache:/var/cache/nginx  # том для кэша
+      # - ./nginx/ssl:/etc/nginx/ssl:ro  # Для HTTPS (опционально)
+    networks:
+      - pigeongram_network
+    depends_on:
+      - app
+      - minio
+      
+networks:
+  pigeongram_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    name: pigeongram_postgres_data
+  pgadmin_data:
+    name: pigeongram_pgadmin_data
+  redis_data:
+    name: pigeongram_redis_data
+  minio_data:
+    name: pigeongram_minio_data
+  nginx_cache:
+    name: pigeongram_nginx_cache

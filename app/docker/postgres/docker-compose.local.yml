@@ -1,0 +1,150 @@
+services:
+  postgres:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: pigeongram_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: pigeongram
+      POSTGRES_PASSWORD: pigeongram_secret
+      POSTGRES_DB: pigeongram
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --locale=ru_RU.UTF-8"
+      POSTGRES_HOST_AUTH_METHOD: scram-sha-256
+      PGTZ: Europe/Moscow
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backups:/backups
+      - ./logs:/var/log/postgresql
+    networks:
+      - pigeongram_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pigeongram -d pigeongram"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: pigeongram_pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@pigeongram.local
+      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    networks:
+      - pigeongram_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  redis:
+    image: redis:7-alpine
+    container_name: pigeongram_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --requirepass redis_secret
+    networks:
+      - pigeongram_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "redis_secret", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: pigeongram_redis_commander
+    restart: unless-stopped
+    environment:
+      REDIS_HOSTS: local:redis:6379:0:redis_secret
+      REDIS_PASSWORD: redis_secret
+    ports:
+      - "8081:8081"
+    networks:
+      - pigeongram_network
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  minio:
+    image: minio/minio:latest
+    container_name: pigeongram_minio
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_DOMAIN: localhost
+      MINIO_PROMETHEUS_AUTH_TYPE: "public"
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    networks:
+      - pigeongram_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  nginx:
+    build: ../nginx
+    container_name: pigeongram_nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "81:81"  # Дополнительный порт для прямого доступа к MinIO
+    networks:
+      - pigeongram_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    volumes:
+      # 👇 Используем локальную конфигурацию
+      - ../nginx/nginx.local.conf:/etc/nginx/nginx.conf:ro
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  pigeongram_network:
+    external: true
+
+volumes:
+  postgres_data:
+    name: pigeongram_postgres_data
+  pgadmin_data:
+    name: pigeongram_pgadmin_data
+  redis_data:
+    name: pigeongram_redis_data
+  minio_data:
+    name: pigeongram_minio_data

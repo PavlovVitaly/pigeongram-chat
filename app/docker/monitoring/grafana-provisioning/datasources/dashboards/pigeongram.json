@@ -1,0 +1,101 @@
+{
+  "dashboard": {
+    "title": "PigeonGram Monitoring",
+    "tags": ["pigeongram"],
+    "timezone": "browser",
+    "panels": [
+      {
+        "title": "Активные WebSocket соединения",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "pigeongram_connections_active",
+            "legendFormat": "Активные"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}
+      },
+      {
+        "title": "Сообщения в секунду",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(pigeongram_messages_total[1m])",
+            "legendFormat": "Сообщений/с"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}
+      },
+      {
+        "title": "HTTP запросы по эндпоинтам",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(pigeongram_http_requests_total[5m])",
+            "legendFormat": "{{ endpoint }}"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8}
+      },
+      {
+        "title": "Загрузка CPU",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(process_cpu_seconds_total[1m])",
+            "legendFormat": "CPU %"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8}
+      },
+      {
+        "title": "Использование памяти",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "go_memstats_alloc_bytes",
+            "legendFormat": "Память"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16}
+      },
+      {
+        "title": "Размер очереди WebSocket",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "pigeongram_websocket_queue_size",
+            "legendFormat": "{{ username }}"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16}
+      },
+      {
+        "title": "Операции с БД",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(pigeongram_database_operations_total[5m])",
+            "legendFormat": "{{ operation }}"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 24}
+      },
+      {
+        "title": "Кэш hit/miss",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(pigeongram_cache_operations_total{result='hit'}[5m])",
+            "legendFormat": "Hit"
+          },
+          {
+            "expr": "rate(pigeongram_cache_operations_total{result='miss'}[5m])",
+            "legendFormat": "Miss"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 24}
+      }
+    ]
+  }
+}
