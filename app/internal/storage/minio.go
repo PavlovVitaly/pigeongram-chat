@@ -121,13 +121,13 @@ func (m *MinIOClient) GenerateUploadURL(ctx context.Context, chatID, userID, fil
 	policy.SetExpires(time.Now().Add(m.uploadExpiry))
 	policy.SetContentLengthRange(1, m.maxFileSize)
 
-	// Получаем внутренний URL от MinIO клиента
+	// Получаем внутренний URL и formData от MinIO клиента
 	_, formData, err := m.client.PresignedPostPolicy(ctx, policy)
 	if err != nil {
 		return "", nil, fmt.Errorf("ошибка создания presigned URL: %w", err)
 	}
 
-	// Формируем правильный публичный URL
+	// Формируем публичный URL
 	var uploadURL string
 	if m.publicEndpoint != "" {
 		// Очищаем публичный эндпоинт
