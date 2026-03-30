@@ -130,16 +130,19 @@ func (m *MinIOClient) GenerateUploadURL(ctx context.Context, chatID, userID, fil
 	// Нормализуем публичный эндпоинт
 	publicURL := normalizePublicEndpoint(m.publicEndpoint)
 
+	var uploadURL string
 	if publicURL != nil {
-		// Заменяем хост на публичный
-		internalURL.Host = publicURL.Host
-		// Сохраняем схему (http/https) из публичного эндпоинта
-		internalURL.Scheme = publicURL.Scheme
+		// Собираем URL вручную, чтобы правильно сформировать путь
+		uploadURL = fmt.Sprintf("%s://%s/%s/", publicURL.Scheme, publicURL.Host, m.bucketName)
+	} else {
+		uploadURL = internalURL.String()
 	}
 
-	return internalURL.String(), formData, nil
+	log.Printf("📤 [MinIO] Upload URL: %s", uploadURL)
+	return uploadURL, formData, nil
 }
 
+// GenerateDownloadURL - создает ссылку для скачивания
 // GenerateDownloadURL - создает ссылку для скачивания
 func (m *MinIOClient) GenerateDownloadURL(ctx context.Context, chatID, objectKey string) (string, error) {
 	log.Printf("🔍 [MinIO] Генерация ссылки на скачивание: bucket=%s, key=%s",
@@ -172,17 +175,25 @@ func (m *MinIOClient) GenerateDownloadURL(ctx context.Context, chatID, objectKey
 	// Нормализуем публичный эндпоинт
 	publicURL := normalizePublicEndpoint(m.publicEndpoint)
 
+	var downloadURL string
 	if publicURL != nil {
-		// Заменяем хост на публичный
-		presignedURL.Host = publicURL.Host
-		// Сохраняем схему (http/https) из публичного эндпоинта
-		presignedURL.Scheme = publicURL.Scheme
+		// Собираем URL вручную
+		// Формат: http://public-host/minio/bucket-name/object-key?params
+		baseURL := fmt.Sprintf("%s://%s/minio/%s/%s",
+			publicURL.Scheme, publicURL.Host, m.bucketName, objectKey)
+
+		// Добавляем параметры
+		if len(reqParams) > 0 {
+			baseURL = baseURL + "?" + reqParams.Encode()
+		}
+
+		downloadURL = baseURL
+	} else {
+		downloadURL = presignedURL.String()
 	}
 
-	urlStr := presignedURL.String()
-	log.Printf("✅ [MinIO] Ссылка сгенерирована: %s", urlStr)
-
-	return urlStr, nil
+	log.Printf("✅ [MinIO] Ссылка сгенерирована: %s", downloadURL)
+	return downloadURL, nil
 }
 
 // normalizePublicEndpoint нормализует публичный эндпоинт
