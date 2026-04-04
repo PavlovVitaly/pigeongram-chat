@@ -139,7 +139,7 @@ services:
     ports:
       - "80:80"
     volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./config/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - nginx_cache:/var/cache/nginx
     networks:
       - pigeongram_network
