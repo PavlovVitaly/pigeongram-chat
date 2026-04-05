@@ -29,7 +29,16 @@ go.work.sum
 
 # Editor/IDE
 # .idea/
-# .vscode/
+.vscode/
+
+# SSL/TLS certificates and keys
+*.pem
+*.crt
+*.key
+*.p12
+*.pfx
+*.csr
+*.der
 
 # Игнорировать примеры конфигурации
 deploy/config/.env.production

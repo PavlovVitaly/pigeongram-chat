@@ -86,7 +86,8 @@ install_base_packages() {
         rsync \
         tmux \
         iotop \
-        iftop
+        iftop \
+	openssl
     
     print_success "Базовые пакеты установлены"
 }
