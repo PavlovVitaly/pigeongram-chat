@@ -565,8 +565,23 @@
 
             // 👇 Очищаем имя файла от специальных символов на клиенте
             let safeFilename = file.name;
-            safeFilename = safeFilename.replace(/['"`$&|;()\[\]{}]/g, '_');
-            safeFilename = safeFilename.replace(/\s+/g, '_'); // пробелы в подчеркивания
+            // 1. Убираем path traversal
+            safeFilename = safeFilename.replace(/[/\\]/g, '_');
+            // 2. Убираем URL-спецсимволы
+            safeFilename = safeFilename.replace(/[?#&%=]/g, '_');
+            // 3. Убираем опасные символы
+            safeFilename = safeFilename.replace(/['"`$&|;()\[\]{}<>]/g, '_');
+            // 4. Заменяем пробелы
+            safeFilename = safeFilename.replace(/\s+/g, '_');
+            // 5. Убираем протоколы из имени (если пользователь вставил URL)
+            safeFilename = safeFilename.replace(/^https?:\/\//, '');
+            safeFilename = safeFilename.replace(/^www\./, '');
+            // 6. Ограничиваем длину
+            if (safeFilename.length > 200) {
+                const ext = safeFilename.split('.').pop();
+                const name = safeFilename.substring(0, 190);
+                safeFilename = ext ? `${name}.${ext}` : name;
+            }
 
             console.log('📤 Оригинальное имя:', file.name);
             console.log('📤 Безопасное имя:', safeFilename);

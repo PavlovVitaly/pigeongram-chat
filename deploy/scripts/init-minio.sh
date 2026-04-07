@@ -26,6 +26,7 @@ MINIO_CONTAINER=${MINIO_CONTAINER:-pigeongram_minio}
 MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-minioadmin}
 MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-minioadmin}
 MINIO_BUCKET=${MINIO_BUCKET:-pigeongram-files}
+MINIO_PUBLIC_URL=${MINIO_PUBLIC_URL:-"https://45.8.97.91"}
 
 print_step "Ожидание запуска MinIO..."
 

@@ -127,18 +127,29 @@ func (m *MinIOClient) GenerateUploadURL(ctx context.Context, chatID, userID, fil
 		return "", nil, fmt.Errorf("ошибка создания presigned URL: %w", err)
 	}
 
-	// Формируем публичный URL
+	// Формируем публичный URL для загрузки
 	var uploadURL string
 	if m.publicEndpoint != "" {
-		// Очищаем публичный эндпоинт
-		publicEndpoint := m.publicEndpoint
-		if !strings.HasPrefix(publicEndpoint, "http://") && !strings.HasPrefix(publicEndpoint, "https://") {
-			publicEndpoint = "http://" + publicEndpoint
-		}
-		publicEndpoint = strings.TrimSuffix(publicEndpoint, "/")
+		// Парсим публичный эндпоинт
+		publicURL, err := url.Parse(m.publicEndpoint)
+		if err != nil {
+			log.Printf("⚠️ [MinIO] Ошибка парсинга publicEndpoint: %v", err)
+			// fallback
+			uploadURL = fmt.Sprintf("http://localhost:9000/%s/", m.bucketName)
+		} else {
+			// Определяем схему из URL
+			scheme := publicURL.Scheme
+			if scheme == "" {
+				scheme = "https" // по умолчанию для production
+			}
+			host := publicURL.Host
+			if host == "" {
+				host = publicURL.Path
+			}
 
-		// Формируем URL для загрузки через Nginx
-		uploadURL = fmt.Sprintf("%s/minio/%s/", publicEndpoint, m.bucketName)
+			// Формируем URL для загрузки через Nginx
+			uploadURL = fmt.Sprintf("%s://%s/minio/%s/", scheme, host, m.bucketName)
+		}
 	} else {
 		uploadURL = fmt.Sprintf("http://localhost:9000/%s/", m.bucketName)
 	}
@@ -176,19 +187,29 @@ func (m *MinIOClient) GenerateDownloadURL(ctx context.Context, chatID, objectKey
 		return "", fmt.Errorf("ошибка создания presigned URL: %w", err)
 	}
 
-	// Формируем правильный публичный URL
+	// Формируем правильный публичный URL для скачивания
 	var downloadURL string
 	if m.publicEndpoint != "" {
-		// Очищаем публичный эндпоинт
-		publicEndpoint := m.publicEndpoint
-		if !strings.HasPrefix(publicEndpoint, "http://") && !strings.HasPrefix(publicEndpoint, "https://") {
-			publicEndpoint = "http://" + publicEndpoint
-		}
-		publicEndpoint = strings.TrimSuffix(publicEndpoint, "/")
+		// Парсим публичный эндпоинт
+		publicURL, err := url.Parse(m.publicEndpoint)
+		if err != nil {
+			log.Printf("⚠️ [MinIO] Ошибка парсинга publicEndpoint: %v", err)
+			downloadURL = presignedURL.String()
+		} else {
+			// Определяем схему из URL
+			scheme := publicURL.Scheme
+			if scheme == "" {
+				scheme = "https" // по умолчанию для production
+			}
+			host := publicURL.Host
+			if host == "" {
+				host = publicURL.Path
+			}
 
-		// Формируем URL для скачивания через Nginx
-		downloadURL = fmt.Sprintf("%s/minio/%s/%s?%s",
-			publicEndpoint, m.bucketName, objectKey, reqParams.Encode())
+			// Формируем URL для скачивания через Nginx
+			downloadURL = fmt.Sprintf("%s://%s/minio/%s/%s?%s",
+				scheme, host, m.bucketName, objectKey, reqParams.Encode())
+		}
 	} else {
 		downloadURL = presignedURL.String()
 	}
