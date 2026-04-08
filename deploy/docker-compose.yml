@@ -129,7 +129,7 @@ services:
       MINIO_USE_SSL: "false"
       MINIO_BUCKET: ${MINIO_BUCKET:-pigeongram-files}
       MINIO_REGION: ${MINIO_REGION:-us-east-1}
-      MINIO_PUBLIC_URL: http://45.8.97.91
+      MINIO_PUBLIC_URL: ${MINIO_PUBLIC_URL:-https://45.8.97.91}
 
   # ========== NGINX ==========
   nginx:
@@ -161,7 +161,7 @@ services:
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
-      - '--web.external-url=http://45.8.97.91/prometheus/'
+      - '--web.external-url=https://45.8.97.91/prometheus/'
       - '--web.route-prefix=/'
     networks:
       - pigeongram_network
@@ -177,7 +177,7 @@ services:
     environment:
       - GF_SECURITY_ADMIN_USER=admin
       - GF_SECURITY_ADMIN_PASSWORD=admin
-      - GF_SERVER_ROOT_URL=http://45.8.97.91/grafana/
+      - GF_SERVER_ROOT_URL=https://45.8.97.91/grafana/
       - GF_SERVER_SERVE_FROM_SUB_PATH=true
       - GF_SERVER_ENFORCE_DOMAIN=false
       - GF_SERVER_ROUTER_LOGGING=true
