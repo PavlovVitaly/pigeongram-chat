@@ -150,6 +150,18 @@ services:
       - app
       - minio
 
+    # ========== NGINX EXPORTER ==========
+  nginx-exporter:
+    image: nginx/nginx-prometheus-exporter:latest
+    container_name: pigeongram_nginx_exporter
+    restart: unless-stopped
+    environment:
+      - SCRAPE_URI=http://pigeongram_nginx:80/stub_status
+    networks:
+      - pigeongram_network
+    depends_on:
+      - nginx
+
   # ========== PROMETHEUS ==========
   prometheus:
     image: prom/prometheus:latest

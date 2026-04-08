@@ -32,3 +32,8 @@ scrape_configs:
     static_configs:
       - targets: ['minio:9000']
     scrape_interval: 30s
+  
+  - job_name: 'nginx'
+    static_configs:
+      - targets: ['pigeongram_nginx_exporter:9113']
+    scrape_interval: 30s
