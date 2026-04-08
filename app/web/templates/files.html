@@ -355,6 +355,95 @@
         let reconnectAttempts = 0;
         const maxReconnectAttempts = 5;
         
+        // ==================== КЭШИРОВАНИЕ ФАЙЛОВ ====================
+        let cachedFiles = null;
+        let isLoading = false;
+        let backgroundRefreshTimeout = null;
+        
+        // Отрисовка списка (быстрая, без запроса к серверу)
+        function renderFiles(files) {
+            const container = document.getElementById('fileList');
+            container.innerHTML = '';
+            
+            if (!files || files.length === 0) {
+                showEmptyState();
+                return;
+            }
+            
+            files.forEach(file => {
+                container.appendChild(createFileElement(file));
+            });
+        }
+        
+        // Загрузка с кэшем
+        async function loadFiles(force = false) {
+            if (isLoading) return;
+            
+            // Если есть кэш и не форсируем - показываем мгновенно
+            if (!force && cachedFiles) {
+                renderFiles(cachedFiles);
+                // Фоновое обновление (не блокирует UI)
+                scheduleBackgroundRefresh();
+                return;
+            }
+            
+            isLoading = true;
+            
+            const container = document.getElementById('fileList');
+            container.innerHTML = '<div class="loading">Загрузка файлов...</div>';
+            
+            try {
+                const response = await fetch(`/api/files/list?chat_id=${chatId}`);
+                if (!response.ok) throw new Error('Ошибка загрузки');
+                
+                cachedFiles = await response.json();
+                renderFiles(cachedFiles);
+                
+            } catch (err) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <div class="icon">❌</div>
+                        <h3>Ошибка загрузки</h3>
+                        <p>${escapeHtml(err.message)}</p>
+                        <button onclick="loadFiles(true)" class="btn btn-primary">Повторить</button>
+                    </div>
+                `;
+            } finally {
+                isLoading = false;
+            }
+        }
+        
+        // Фоновое обновление (не чаще раза в 30 секунд)
+        function scheduleBackgroundRefresh() {
+            if (backgroundRefreshTimeout) clearTimeout(backgroundRefreshTimeout);
+            
+            backgroundRefreshTimeout = setTimeout(async () => {
+                try {
+                    const response = await fetch(`/api/files/list?chat_id=${chatId}`);
+                    if (response.ok) {
+                        const newFiles = await response.json();
+                        // Обновляем кэш и UI только если изменилось
+                        if (JSON.stringify(cachedFiles) !== JSON.stringify(newFiles)) {
+                            cachedFiles = newFiles;
+                            renderFiles(cachedFiles);
+                        }
+                    }
+                } catch (err) {
+                    console.warn('Фоновая загрузка не удалась:', err);
+                }
+                backgroundRefreshTimeout = null;
+            }, 30000);
+        }
+        
+        // Инвалидация кэша (при загрузке/удалении файла)
+        function invalidateFileCache() {
+            cachedFiles = null;
+            if (backgroundRefreshTimeout) {
+                clearTimeout(backgroundRefreshTimeout);
+                backgroundRefreshTimeout = null;
+            }
+        }
+        
         // ==================== WebSocket соединение ====================
         function connectFileWebSocket() {
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -407,6 +496,9 @@
             console.log('📁 [CLIENT] Обработка файлового события:', event);
             
             if (event.chatId === chatId) {
+                // Инвалидируем кэш при любом изменении
+                invalidateFileCache();
+                
                 if (event.eventType === 'upload') {
                     console.log('📤 [CLIENT] Загрузка файла:', event.file);
                     showToast(`📤 ${event.username} загрузил файл: ${event.file.name}`, 'info');
@@ -417,7 +509,8 @@
                     removeFileFromList(event.file.key);
                 }
                 
-                setTimeout(loadFiles, 500);
+                // Перезагружаем список (с кэшем, но принудительно)
+                setTimeout(() => loadFiles(true), 500);
             }
         }
         
@@ -516,38 +609,6 @@
             `;
         }
         
-        // ==================== Загрузка файлов ====================
-        async function loadFiles() {
-            const container = document.getElementById('fileList');
-            
-            try {
-                const response = await fetch(`/api/files/list?chat_id=${chatId}`);
-                if (!response.ok) throw new Error('Ошибка загрузки');
-                
-                const files = await response.json();
-                container.innerHTML = '';
-                
-                if (!files || files.length === 0) {
-                    showEmptyState();
-                    return;
-                }
-                
-                files.forEach(file => {
-                    container.appendChild(createFileElement(file));
-                });
-                
-            } catch (err) {
-                container.innerHTML = `
-                    <div class="empty-state">
-                        <div class="icon">❌</div>
-                        <h3>Ошибка загрузки</h3>
-                        <p>${escapeHtml(err.message)}</p>
-                        <button onclick="loadFiles()" class="btn btn-primary">Повторить</button>
-                    </div>
-                `;
-            }
-        }
-        
         // ==================== Загрузка файла ====================
         async function uploadFile(event) {
             event.preventDefault();
@@ -563,7 +624,7 @@
                 return;
             }
 
-            // 👇 Очищаем имя файла от специальных символов на клиенте
+            // Очищаем имя файла от специальных символов на клиенте
             let safeFilename = file.name;
             // 1. Убираем path traversal
             safeFilename = safeFilename.replace(/[/\\]/g, '_');
@@ -656,7 +717,7 @@
                                     headers: {'Content-Type': 'application/json'},
                                     body: JSON.stringify({
                                         chat_id: chatId,
-                                        filename: file.name, // оригинальное имя для отображения
+                                        filename: file.name,
                                         key: objectKey
                                     })
                                 });
@@ -668,10 +729,14 @@
 
                                 console.log('✅ Уведомление отправлено успешно');
                                 showToast('✅ Файл успешно загружен!', 'success');
+                                
+                                // Инвалидируем кэш после успешной загрузки
+                                invalidateFileCache();
 
                             } catch (err) {
                                 console.error('❌ Ошибка уведомления:', err);
                                 showToast('⚠️ Файл загружен, но уведомление не отправлено', 'warning');
+                                invalidateFileCache();
                             }
 
                             resolve();
@@ -685,7 +750,7 @@
                 });
 
                 fileInput.value = '';
-                await loadFiles();
+                await loadFiles(true);
 
             } catch (err) {
                 showToast('❌ ' + err.message, 'error');
@@ -698,8 +763,6 @@
         // ==================== Скачивание файла ====================
         async function downloadFile(key) {
             console.log('⬇️ Скачивание файла через прокси:', key);
-
-            // Просто переходим по ссылке - файл придет от сервера напрямую
             window.location.href = `/api/files/download?chat_id=${chatId}&key=${encodeURIComponent(key)}`;
         }
         
@@ -717,7 +780,7 @@
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({ 
                         chat_id: chatId, 
-                        key: key  // отправляем как есть, сервер декодирует
+                        key: key
                     })
                 });
                 
@@ -736,7 +799,10 @@
                 console.log('✅ Результат удаления:', result);
                 
                 showToast('✅ Файл удален', 'success');
-                await loadFiles();
+                
+                // Инвалидируем кэш после удаления
+                invalidateFileCache();
+                await loadFiles(true);
                 
             } catch (err) {
                 console.error('❌ Ошибка удаления:', err);
@@ -771,12 +837,22 @@
         
         // ==================== Инициализация ====================
         document.getElementById('uploadForm').addEventListener('submit', uploadFile);
+        
+        // Показать кэш мгновенно (если есть)
+        if (cachedFiles) {
+            renderFiles(cachedFiles);
+        }
+        
+        // Загрузка списка (первый раз)
         loadFiles();
         connectFileWebSocket();
         
         window.addEventListener('beforeunload', function() {
             if (fileSocket) {
                 fileSocket.close();
+            }
+            if (backgroundRefreshTimeout) {
+                clearTimeout(backgroundRefreshTimeout);
             }
         });
     </script>
