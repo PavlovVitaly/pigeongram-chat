@@ -3,9 +3,11 @@ package postgres
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"pigeongram/app/internal/models"
+	"pigeongram/app/pkg/crypto"
 	dto "pigeongram/app/pkg/models"
 
 	"gorm.io/gorm"
@@ -21,11 +23,28 @@ func NewUserRepository(db *gorm.DB) *UserRepository {
 
 // Create создает нового пользователя
 func (r *UserRepository) Create(ctx context.Context, user *dto.User) error {
+	// Хешируем пароль
+	hashedPassword, err := crypto.HashPassword(user.Password)
+	if err != nil {
+		return fmt.Errorf("ошибка хеширования пароля: %w", err)
+	}
+
 	entity := &models.UserEntity{
 		Username: user.Username,
-		Password: user.Password,
+		Password: hashedPassword,
 	}
 	return r.db.WithContext(ctx).Create(entity).Error
+}
+
+// Validate проверяет логин и пароль (с bcrypt)
+func (r *UserRepository) Validate(ctx context.Context, username, password string) (bool, error) {
+	user, err := r.GetByUsername(ctx, username)
+	if err != nil || user == nil {
+		return false, err
+	}
+
+	// Сравниваем пароль с хешем
+	return crypto.CheckPasswordHash(password, user.Password), nil
 }
 
 // GetByUsername находит пользователя по имени

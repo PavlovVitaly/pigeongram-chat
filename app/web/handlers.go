@@ -121,6 +121,13 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 
 	ctx := context.Background()
 
+	// Validate уже использует bcrypt
+	valid, err := userRepo.Validate(ctx, username, password)
+	if err != nil || !valid {
+		http.Redirect(w, r, "/?error=invalid", http.StatusSeeOther)
+		return
+	}
+
 	user, err := userRepo.GetByUsername(ctx, username)
 	if err != nil || user == nil || user.Password != password {
 		http.Redirect(w, r, "/?error=invalid", http.StatusSeeOther)
