@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	"pigeongram/app/internal/models"
@@ -36,15 +37,33 @@ func (r *UserRepository) Create(ctx context.Context, user *dto.User) error {
 	return r.db.WithContext(ctx).Create(entity).Error
 }
 
-// Validate проверяет логин и пароль (с bcrypt)
 func (r *UserRepository) Validate(ctx context.Context, username, password string) (bool, error) {
+	log.Printf("🔍 [VALIDATE] Checking user: %s", username)
+
 	user, err := r.GetByUsername(ctx, username)
-	if err != nil || user == nil {
+	if err != nil {
+		log.Printf("❌ [VALIDATE] DB error: %v", err)
 		return false, err
 	}
+	if user == nil {
+		log.Printf("❌ [VALIDATE] User not found: %s", username)
+		return false, nil
+	}
+
+	log.Printf("🔍 [VALIDATE] User found: %s", username)
+	log.Printf("🔍 [VALIDATE] Stored hash length: %d", len(user.Password))
+	log.Printf("🔍 [VALIDATE] Stored hash: %s", user.Password)
+	log.Printf("🔍 [VALIDATE] Input password: %s", password)
 
 	// Сравниваем пароль с хешем
-	return crypto.CheckPasswordHash(password, user.Password), nil
+	result := crypto.CheckPasswordHash(password, user.Password)
+	log.Printf("🔍 [VALIDATE] Password match result: %v", result)
+
+	if !result {
+		log.Printf("❌ [VALIDATE] Password mismatch for user: %s", username)
+	}
+
+	return result, nil
 }
 
 // GetByUsername находит пользователя по имени
@@ -75,15 +94,6 @@ func (r *UserRepository) UpdateLastSeen(ctx context.Context, userID uint) error 
 	return r.db.WithContext(ctx).Model(&models.UserEntity{}).
 		Where("id = ?", userID).
 		Update("last_seen", time.Now()).Error
-}
-
-// Validate проверяет логин и пароль (временная версия, потом добавим хеширование)
-func (r *UserRepository) Validate(ctx context.Context, username, password string) (bool, error) {
-	user, err := r.GetByUsername(ctx, username)
-	if err != nil || user == nil {
-		return false, err
-	}
-	return user.Password == password, nil
 }
 
 // Count возвращает общее количество пользователей

@@ -128,8 +128,9 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Получаем пользователя для создания сессии
 	user, err := userRepo.GetByUsername(ctx, username)
-	if err != nil || user == nil || user.Password != password {
+	if err != nil || user == nil {
 		http.Redirect(w, r, "/?error=invalid", http.StatusSeeOther)
 		return
 	}
