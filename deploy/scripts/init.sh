@@ -78,29 +78,58 @@ print_step "Инициализация MinIO"
 chmod +x /opt/pigeongram/deploy/scripts/init-minio.sh
 /opt/pigeongram/deploy/scripts/init-minio.sh
 
-# 10. Проверка статуса
+# 10. Настройка SSL сертификатов (если используется домен)
+if [ ! -z "$DOMAIN" ] && [ "$DOMAIN" != "45.8.97.91" ]; then
+    print_step "Настройка SSL сертификатов для $DOMAIN"
+    
+    # Проверяем наличие скрипта setup-ssl.sh
+    if [ -f "/opt/pigeongram/deploy/scripts/setup-ssl.sh" ]; then
+        chmod +x /opt/pigeongram/deploy/scripts/setup-ssl.sh
+        /opt/pigeongram/deploy/scripts/setup-ssl.sh
+    else
+        print_error "setup-ssl.sh не найден! SSL не настроен"
+    fi
+else
+    print_info "SSL не настроен (используется IP или самоподписанный сертификат)"
+fi
+
+# 11. Запуск certbot для автоматического обновления
+if [ ! -z "$DOMAIN" ] && [ "$DOMAIN" != "45.8.97.91" ]; then
+    print_step "Запуск certbot для автоматического обновления сертификатов"
+    docker-compose up -d certbot
+    print_success "Certbot запущен (обновление каждые 12 часов)"
+fi
+
+# 12. Проверка статуса
 print_step "Проверка статуса контейнеров"
 echo ""
 docker-compose ps
 
-# 11. Проверка доступности
+# 13. Проверка доступности
 print_step "Проверка доступности сервисов"
 
-# Проверка health endpoint приложения
+# 14. Проверка через HTTPS если есть домен
+if [ ! -z "$DOMAIN" ] && [ "$DOMAIN" != "45.8.97.91" ]; then
+    PROTOCOL="https"
+else
+    PROTOCOL="http"
+fi
+
+# 15. Проверка health endpoint приложения
 if curl -s http://localhost/health > /dev/null 2>&1; then
     print_success "Приложение доступно: http://localhost/health"
 else
     print_error "Приложение недоступно"
 fi
 
-# Проверка Prometheus
+# 16. Проверка Prometheus
 if curl -s http://localhost/prometheus/-/healthy > /dev/null 2>&1; then
     print_success "Prometheus доступен: http://localhost/prometheus"
 else
     print_warning "Prometheus недоступен"
 fi
 
-# Проверка Grafana
+# 17. Проверка Grafana
 if curl -s http://localhost/grafana/api/health > /dev/null 2>&1; then
     print_success "Grafana доступна: http://localhost/grafana"
 else
