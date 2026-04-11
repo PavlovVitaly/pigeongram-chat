@@ -5,9 +5,9 @@
 
 set -e
 
-DOMAIN="pigeongram.com.ru"
+DOMAIN="test.pigeongram.com.ru"
 TEST_DOMAIN="test.pigeongram.com.ru"
-EMAIL="admin@pigeongram.com.ru"
+EMAIL="admin@test.pigeongram.com.ru"
 
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
