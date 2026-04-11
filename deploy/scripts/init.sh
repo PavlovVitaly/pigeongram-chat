@@ -80,15 +80,9 @@ chmod +x /opt/pigeongram/deploy/scripts/init-minio.sh
 
 # 10. Настройка SSL сертификатов (если используется домен)
 if [ ! -z "$DOMAIN" ] && [ "$DOMAIN" != "45.8.97.91" ]; then
-    print_step "Настройка SSL сертификатов для $DOMAIN"
-    
-    # Проверяем наличие скрипта setup-ssl.sh
-    if [ -f "/opt/pigeongram/deploy/scripts/setup-ssl.sh" ]; then
-        chmod +x /opt/pigeongram/deploy/scripts/setup-ssl.sh
-        /opt/pigeongram/deploy/scripts/setup-ssl.sh
-    else
-        print_error "setup-ssl.sh не найден! SSL не настроен"
-    fi
+    print_step "Настройка SSL для $DOMAIN"
+    /opt/pigeongram/deploy/scripts/setup-ssl.sh
+    docker-compose up -d certbot
 else
     print_info "SSL не настроен (используется IP или самоподписанный сертификат)"
 fi

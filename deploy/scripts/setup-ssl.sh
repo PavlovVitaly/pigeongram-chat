@@ -1,45 +1,37 @@
 #!/bin/bash
-# =====================================================
-# PigeonGram - Настройка SSL сертификатов (Let's Encrypt)
-# =====================================================
-
 set -e
-
-# =============================================
-# ИЗМЕНЕНИЕ: домены из .env.production
-# =============================================
-DOMAIN=${DOMAIN:-"test.pigeongram.com.ru"}
-TEST_DOMAIN=${TEST_DOMAIN:-"test.pigeongram.com.ru"}
-EMAIL=${SSL_EMAIL:-"admin@test.pigeongram.com.ru"}
-WEBROOT="/var/www/certbot"
 
 cd /opt/pigeongram/deploy
 
-echo "▶ Создание директорий для certbot"
-mkdir -p certbot/www/.well-known/acme-challenge
-chmod 755 certbot/www
-chmod 755 certbot/www/.well-known
-chmod 755 certbot/www/.well-known/acme-challenge
+# Загружаем переменные
+source config/.env.production
 
-echo "▶ Получение сертификата для $DOMAIN"
+echo "▶ 1. Создание директорий"
+mkdir -p certbot/www/.well-known/acme-challenge
+mkdir -p certificates/nginx/ssl
+
+echo "▶ 2. Временный HTTP конфиг для получения сертификата"
+cp config/nginx/nginx.http.conf config/nginx/nginx.conf
+
+echo "▶ 3. Запуск nginx в HTTP режиме"
+docker-compose up -d nginx
+sleep 5
+
+echo "▶ 4. Получение сертификата для $DOMAIN"
 docker run --rm \
   -v $(pwd)/certificates/nginx/ssl:/etc/letsencrypt \
   -v $(pwd)/certbot/www:/var/www/certbot \
   certbot/certbot certonly --webroot \
-  --webroot-path=$WEBROOT \
-  --email $EMAIL \
+  --webroot-path=/var/www/certbot \
+  --email $SSL_EMAIL \
   --agree-tos \
-  --no-eff-email \
+  --non-interactive \
   -d $DOMAIN
 
-if [ ! -z "$TEST_DOMAIN" ]; then
-    echo "▶ Получение сертификата для $TEST_DOMAIN"
-    docker run --rm \
-      -v $(pwd)/certificates/nginx/ssl:/etc/letsencrypt \
-      -v $(pwd)/certbot/www:/var/www/certbot \
-      certbot/certbot certonly --webroot \
-      --webroot-path=$WEBROOT \
-      -d $TEST_DOMAIN
-fi
+echo "▶ 5. Переключение на SSL конфиг"
+cp config/nginx/nginx.conf.ssl config/nginx/nginx.conf
 
-echo "✅ SSL сертификаты получены"
+echo "▶ 6. Перезапуск nginx с SSL"
+docker-compose restart nginx
+
+echo "✅ SSL готов для $DOMAIN"
