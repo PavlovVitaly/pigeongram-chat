@@ -26,6 +26,7 @@ docker run --rm \
   --email $SSL_EMAIL \
   --agree-tos \
   --non-interactive \
+  --force-renewal \
   -d $DOMAIN
 
 echo "▶ 5. Переключение на SSL конфиг"
