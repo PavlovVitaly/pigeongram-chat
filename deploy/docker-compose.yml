@@ -130,7 +130,7 @@ services:
       MINIO_USE_SSL: "false"
       MINIO_BUCKET: ${MINIO_BUCKET:-pigeongram-files}
       MINIO_REGION: ${MINIO_REGION:-us-east-1}
-      MINIO_PUBLIC_URL: ${MINIO_PUBLIC_URL}
+      MINIO_PUBLIC_URL: ${MINIO_PUBLIC_URL:-https://test.pigeongram.com.ru}
 
   # ========== NGINX ==========
   nginx:
