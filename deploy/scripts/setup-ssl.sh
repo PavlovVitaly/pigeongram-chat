@@ -23,11 +23,11 @@ docker run --rm \
   -v $(pwd)/certbot/www:/var/www/certbot \
   certbot/certbot certonly --webroot \
   --webroot-path=/var/www/certbot \
-  --email $SSL_EMAIL \
+  --email "$SSL_EMAIL" \
   --agree-tos \
   --non-interactive \
   --force-renewal \
-  -d $DOMAIN
+  -d "$DOMAIN"
 
 echo "▶ 5. Переключение на SSL конфиг"
 cp config/nginx/nginx.conf.ssl config/nginx/nginx.conf
