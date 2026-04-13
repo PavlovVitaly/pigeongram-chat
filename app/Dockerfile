@@ -16,8 +16,6 @@ RUN go mod download
 # Копируем весь исходный код
 COPY . .
 
-COPY scripts/tmp/migration/migrate-passwords.go /app/scripts/
-
 # Собираем приложение
 RUN CGO_ENABLED=0 GOOS=linux go build \
     -ldflags="-s -w" \
