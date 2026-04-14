@@ -1,0 +1,14 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Launch PigeonGram",
+            "type": "go",
+            "request": "launch",
+            "mode": "auto",
+            "program": "${workspaceFolder}/cmd/server",
+            "cwd": "${workspaceFolder}",  // ← ВАЖНО: рабочая директория - корень проекта
+            //"envFile": "${workspaceFolder}/.env"
+        }
+    ]
+}
