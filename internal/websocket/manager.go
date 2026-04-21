@@ -7,11 +7,11 @@ import (
 	"sync"
 	"time"
 
-	"pigeongram/internal/metrics"
-	"pigeongram/internal/storage"
-	"pigeongram/pkg/models"
-	"pigeongram/repository/cache"
-	"pigeongram/repository/postgres"
+	"pigeongram-chat/internal/metrics"
+	"pigeongram-chat/internal/storage"
+	"pigeongram-chat/pkg/models"
+	"pigeongram-chat/repository/cache"
+	"pigeongram-chat/repository/postgres"
 
 	"github.com/go-redis/redis/v8"
 )

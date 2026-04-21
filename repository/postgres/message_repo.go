@@ -3,8 +3,8 @@ package postgres
 import (
 	"context"
 
-	"pigeongram/internal/models"
-	dto "pigeongram/pkg/models"
+	"pigeongram-chat/internal/models"
+	dto "pigeongram-chat/pkg/models"
 
 	"gorm.io/gorm"
 )

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"pigeongram/pkg/models"
+	"pigeongram-chat/pkg/models"
 
 	"github.com/gorilla/websocket"
 )

@@ -2,7 +2,7 @@ package cache
 
 import (
 	"context"
-	"pigeongram/pkg/models" // ← импортируем общие типы
+	"pigeongram-chat/pkg/models" // ← импортируем общие типы
 )
 
 // Cache интерфейс для кэширования

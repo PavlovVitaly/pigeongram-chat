@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"time"
 
-	"pigeongram/internal/metrics"
+	"pigeongram-chat/internal/metrics"
 )
 
 // responseWriter с поддержкой Hijacker для WebSocket

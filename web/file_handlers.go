@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"pigeongram/internal/metrics"
-	"pigeongram/internal/storage"
-	"pigeongram/internal/websocket"
+	"pigeongram-chat/internal/metrics"
+	"pigeongram-chat/internal/storage"
+	"pigeongram-chat/internal/websocket"
 )
 
 type FileHandler struct {

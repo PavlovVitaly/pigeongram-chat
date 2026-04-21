@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"pigeongram/internal/storage"
-	"pigeongram/internal/websocket"
-	"pigeongram/repository/cache"
+	"pigeongram-chat/internal/storage"
+	"pigeongram-chat/internal/websocket"
+	"pigeongram-chat/repository/cache"
 	"time"
 )
 

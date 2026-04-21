@@ -6,7 +6,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	ws "pigeongram/internal/websocket"
+	ws "pigeongram-chat/internal/websocket"
 )
 
 var upgrader = websocket.Upgrader{

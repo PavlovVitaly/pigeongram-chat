@@ -3,7 +3,7 @@ package models
 import (
 	"time"
 
-	dto "pigeongram/pkg/models" // алиас для DTO
+	dto "pigeongram-chat/pkg/models" // алиас для DTO
 
 	"gorm.io/gorm"
 )

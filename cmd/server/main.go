@@ -13,13 +13,13 @@ import (
 	"github.com/go-redis/redis/v8"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
-	"pigeongram/config"
-	"pigeongram/internal/middleware"
-	"pigeongram/internal/storage"
-	"pigeongram/internal/websocket"
-	"pigeongram/repository/cache"
-	"pigeongram/repository/postgres"
-	"pigeongram/web"
+	"pigeongram-chat/config"
+	"pigeongram-chat/internal/middleware"
+	"pigeongram-chat/internal/storage"
+	"pigeongram-chat/internal/websocket"
+	"pigeongram-chat/repository/cache"
+	"pigeongram-chat/repository/postgres"
+	"pigeongram-chat/web"
 )
 
 func main() {
@@ -230,7 +230,7 @@ func main() {
 
 	// Запускаем сервер
 	serverAddr := fmt.Sprintf(":%d", *port)
-	log.Printf("🕊️ PigeonGram сервер %s запущен на http://localhost%s", *serverID, serverAddr)
+	log.Printf("🕊️ pigeongram-chat сервер %s запущен на http://localhost%s", *serverID, serverAddr)
 	log.Printf("📊 Статистика: http://localhost%s/debug/websocket", serverAddr)
 	log.Printf("📈 Prometheus метрики: http://localhost%s/metrics", serverAddr)
 

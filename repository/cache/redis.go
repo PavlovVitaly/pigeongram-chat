@@ -7,7 +7,7 @@ import (
 	"log"
 	"time"
 
-	"pigeongram/pkg/models"
+	"pigeongram-chat/pkg/models"
 
 	"github.com/go-redis/redis/v8"
 	// добавляем для использования GetEnvAsDuration если нужно

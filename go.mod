@@ -1,4 +1,4 @@
-module pigeongram
+module pigeongram-chat
 
 go 1.26
 

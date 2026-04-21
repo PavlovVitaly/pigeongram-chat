@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"pigeongram/pkg/models" // ← импортируем общие типы
+	"pigeongram-chat/pkg/models" // ← импортируем общие типы
 )
 
 // MemoryCache реализует кэш в памяти

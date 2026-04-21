@@ -5,7 +5,7 @@ import (
 	"errors"
 	"time"
 
-	"pigeongram/internal/models"
+	"pigeongram-chat/internal/models"
 
 	"gorm.io/gorm"
 )

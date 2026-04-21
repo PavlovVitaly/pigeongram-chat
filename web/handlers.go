@@ -7,9 +7,9 @@ import (
 	"net/http"
 	"strings"
 
-	"pigeongram/pkg/models"
-	"pigeongram/repository/cache"
-	"pigeongram/repository/postgres"
+	"pigeongram-chat/pkg/models"
+	"pigeongram-chat/repository/cache"
+	"pigeongram-chat/repository/postgres"
 )
 
 var (

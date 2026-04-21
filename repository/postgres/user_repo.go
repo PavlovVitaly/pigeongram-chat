@@ -7,9 +7,9 @@ import (
 	"log"
 	"time"
 
-	"pigeongram/internal/models"
-	"pigeongram/pkg/crypto"
-	dto "pigeongram/pkg/models"
+	"pigeongram-chat/internal/models"
+	"pigeongram-chat/pkg/crypto"
+	dto "pigeongram-chat/pkg/models"
 
 	"gorm.io/gorm"
 )
