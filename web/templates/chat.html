@@ -155,12 +155,7 @@
         </div>
         
         <form id="messageForm" class="message-form">
-            <input type="text" 
-                   id="messageInput" 
-                   class="message-input" 
-                   placeholder="Напишите сообщение..." 
-                   autocomplete="off"
-                   required>
+            <textarea id="messageInput" class="message-input" rows="1" placeholder="Напишите сообщение..."></textarea>
             <button type="submit" class="btn-send">
                 <span>Отправить</span>
                 <span class="shortcut">↵</span>
@@ -182,6 +177,26 @@
             showSystemMessage('❌ Соединение с сервером потеряно');
         };
 
+        document.getElementById('messageInput').addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') {
+                if (e.ctrlKey) {
+                    // Ctrl+Enter: вставляем перенос строки вместо отправки
+                    e.preventDefault();
+                    const start = this.selectionStart;
+                    const end = this.selectionEnd;
+                    const value = this.value;
+                    this.value = value.substring(0, start) + '\n' + value.substring(end);
+                    // перемещаем курсор
+                    this.selectionStart = this.selectionEnd = start + 1;
+                } else if (!e.shiftKey) {
+                    // Enter без Shift и без Ctrl: отправка
+                    e.preventDefault();
+                    document.getElementById('messageForm').dispatchEvent(new Event('submit'));
+                }
+                // Если Shift+Enter (e.shiftKey && !e.ctrlKey), ничего не делаем — браузер сам добавит перенос
+            }
+        });
+
         document.getElementById('messageForm').addEventListener('submit', function(e) {
             e.preventDefault();
 
@@ -191,9 +206,8 @@
             if (text && socket && socket.readyState === WebSocket.OPEN) {
                 console.log('📤 Отправка сообщения:', text);
 
-                // 👇 ПРАВИЛЬНЫЙ ФОРМАТ
                 const message = {
-                    type: 'chat',  // ← ДОЛЖЕН БЫТЬ ТИП 'chat'
+                    type: 'chat',
                     data: {
                         text: text
                     }
@@ -271,7 +285,7 @@
         function escapeHtml(text) {
             const div = document.createElement('div');
             div.textContent = text;
-            return div.innerHTML;
+            return div.innerHTML.replace(/\n/g, '<br>');
         }
 
         function goToFileStorage() {
