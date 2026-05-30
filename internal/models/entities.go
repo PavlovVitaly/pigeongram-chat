@@ -41,6 +41,8 @@ type MessageEntity struct {
 	CreatedAt time.Time      `json:"createdAt"`
 	UpdatedAt time.Time      `json:"updatedAt"`
 	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+	Edited    bool           `gorm:"default:false"`
+	EditedAt  *time.Time     `json:"editedAt,omitempty"`
 
 	User UserEntity `gorm:"foreignKey:UserID" json:"user,omitempty"`
 }

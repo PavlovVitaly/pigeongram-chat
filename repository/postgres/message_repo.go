@@ -2,9 +2,11 @@ package postgres
 
 import (
 	"context"
+	"fmt"
+	"time"
 
 	"pigeongram-chat/internal/models"
-	dto "pigeongram-chat/pkg/models"
+	dto "pigeongram-chat/pkg/models" // DTO
 
 	"gorm.io/gorm"
 )
@@ -18,21 +20,38 @@ func NewMessageRepository(db *gorm.DB) *MessageRepository {
 }
 
 // Create сохраняет новое сообщение
-func (r *MessageRepository) Create(ctx context.Context, message *dto.Message) error {
-	// Находим пользователя по username из DTO
+func (r *MessageRepository) Create(ctx context.Context, msg *dto.Message) (uint, error) {
 	var user models.UserEntity
-	err := r.db.WithContext(ctx).Where("username = ?", message.Username).First(&user).Error
-	if err != nil {
-		return err
+	if err := r.db.WithContext(ctx).Where("username = ?", msg.Username).First(&user).Error; err != nil {
+		return 0, err
 	}
-
 	entity := &models.MessageEntity{
 		UserID:    user.ID,
-		Content:   message.Text,
-		Timestamp: message.Timestamp,
+		Content:   msg.Text,
+		Timestamp: msg.Timestamp,
 	}
+	if err := r.db.WithContext(ctx).Create(entity).Error; err != nil {
+		return 0, err
+	}
+	return entity.ID, nil
+}
 
-	return r.db.WithContext(ctx).Create(entity).Error
+// UpdateMessage обновляет текст и выставляет edited=true
+func (r *MessageRepository) UpdateMessage(ctx context.Context, msgID uint, newText string, username string) error {
+	var msg models.MessageEntity
+	if err := r.db.WithContext(ctx).Preload("User").First(&msg, msgID).Error; err != nil {
+		return err
+	}
+	if msg.User.Username != username {
+		return fmt.Errorf("редактировать можно только свои сообщения")
+	}
+	now := time.Now()
+	return r.db.WithContext(ctx).Model(&msg).Updates(map[string]interface{}{
+		"content":    newText,
+		"edited":     true,
+		"updated_at": now,
+		"edited_at":  now,
+	}).Error
 }
 
 // GetRecent возвращает последние N сообщений с информацией о пользователях

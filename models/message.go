@@ -14,8 +14,9 @@ type Message struct {
 	CreatedAt time.Time      `json:"createdAt"`
 	UpdatedAt time.Time      `json:"updatedAt"`
 	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
-
-	User User `gorm:"foreignKey:UserID" json:"user"`
+	Edited    bool           `gorm:"default:false" json:"edited"`
+	EditedAt  *time.Time     `json:"editedAt,omitempty"`
+	User      User           `gorm:"foreignKey:UserID" json:"user"`
 }
 
 // TableName задает имя таблицы

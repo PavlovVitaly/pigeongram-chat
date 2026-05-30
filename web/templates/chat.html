@@ -116,6 +116,12 @@
             50% { opacity: 0.5; }
             100% { opacity: 1; }
         }
+
+        .edited .message-text::after {
+            content: ' (ред.)';
+            font-size: 0.8em;
+            color: #888;
+        }
     </style>
 </head>
 <body>
@@ -167,10 +173,24 @@
         const username = '{{.}}';
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const socket = new WebSocket(`${protocol}//${window.location.host}/ws`);
-        
+
         socket.onmessage = function(event) {
-            const message = JSON.parse(event.data);
-            addMessage(message);
+            const msg = JSON.parse(event.data);
+            // Если пришёл объект с полем type и data
+            if (msg.type && msg.data) {
+                if (msg.type === 'file') {
+                    // обработка файловых событий
+                } else if (msg.type === 'edit') {
+                    const el = document.querySelector(`.message[data-message-id="${msg.data.id}"]`);
+                    if (el) {
+                        el.querySelector('.message-text').textContent = msg.data.text;
+                        el.classList.add('edited');
+                    }
+                }
+            } else if (msg.username && msg.text !== undefined) {
+                // Старое сообщение чата (без обёртки) — напрямую вызываем addMessage
+                addMessage(msg);
+            }
         };
 
         socket.onclose = function() {
@@ -218,31 +238,100 @@
             }
         });
 
+        // Редактирование сообщения по двойному клику
+        document.getElementById('messages').addEventListener('dblclick', function(e) {
+            const msgDiv = e.target.closest('.message');
+            if (!msgDiv) return;
+            // Редактировать можно только свои сообщения
+            if (!msgDiv.classList.contains('own-message')) return;
+        
+            const messageId = msgDiv.dataset.messageId;
+            if (!messageId) return;
+        
+            const textEl = msgDiv.querySelector('.message-text');
+            const currentText = textEl.textContent;
+        
+            // Создаём поле ввода вместо текста
+            const textarea = document.createElement('textarea');
+            textarea.value = currentText;
+            textarea.style.width = '100%';
+            textEl.replaceWith(textarea);
+            textarea.focus();
+        
+            // Сохранение при Enter
+            textarea.addEventListener('keydown', function(ev) {
+                if (ev.key === 'Enter' && !ev.shiftKey) {
+                    ev.preventDefault();
+                    const newText = textarea.value.trim();
+                    if (newText && newText !== currentText && socket.readyState === WebSocket.OPEN) {
+                        socket.send(JSON.stringify({
+                            type: 'edit',
+                            data: { messageId: Number(messageId), newText: newText }
+                        }));
+                    }
+                    // Возвращаем текстовый элемент
+                    textarea.replaceWith(textEl);
+                    if (newText) textEl.textContent = newText;
+                }
+            });
+        
+            // Отмена при потере фокуса (без сохранения)
+            textarea.addEventListener('blur', function() {
+                textarea.replaceWith(textEl);
+            });
+        });
+
         // В функции addMessage добавляем жесткую фильтрацию
         function addMessage(message) {
-            // 👇 ФИЛЬТРАЦИЯ: не добавляем пустые сообщения
             if (!message || !message.text || message.text.trim() === '') {
                 console.warn('⚠️ Попытка добавить пустое сообщение, игнорируем:', message);
                 return;
             }
-            
+
             // Проверяем что есть отправитель
             if (!message.username || message.username.trim() === '') {
                 message.username = 'Неизвестный';
             }
-            
+
             const container = document.getElementById('messages');
-            
+
             // Убираем системное сообщение если оно первое
             if (container.children.length === 1 && 
                 container.children[0].classList.contains('system-message') &&
                 container.children[0].textContent.includes('Добро пожаловать')) {
                 container.innerHTML = '';
             }
-            
+
+            // Проверяем, существует ли уже сообщение с таким ID
+            let existingDiv = null;
+            if (message.id) {
+                existingDiv = document.querySelector(`.message[data-message-id="${message.id}"]`);
+            }
+
+            if (existingDiv) {
+                // Обновляем текст
+                const textEl = existingDiv.querySelector('.message-text');
+                if (textEl) {
+                    textEl.textContent = message.text;
+                }
+                // Показываем, что отредактировано (если есть поле edited)
+                if (message.edited) {
+                    existingDiv.classList.add('edited');
+                }
+                // Прокручиваем к обновлённому сообщению
+                existingDiv.scrollIntoView({ behavior: 'smooth' });
+                return; // Выходим, не создаём новое
+            }
+
+            // Создаём новое сообщение
             const div = document.createElement('div');
             div.className = 'message' + (message.username === username ? ' own-message' : '');
-            
+            div.dataset.messageId = message.id;
+
+            if (message.edited) {
+                div.classList.add('edited');
+            }
+
             // Безопасное форматирование времени
             let timeStr = '';
             try {
@@ -260,7 +349,7 @@
             } catch (e) {
                 timeStr = '--:--:--';
             }
-            
+
             div.innerHTML = `
                 <div class="message-header">
                     <strong>${escapeHtml(message.username)}</strong>

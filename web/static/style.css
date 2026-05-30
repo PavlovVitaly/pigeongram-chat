@@ -405,3 +405,9 @@ body {
         width: 100%;
     }
 }
+
+.edited .message-text::after {
+    content: ' (ред.)';
+    font-size: 0.8em;
+    color: #888;
+}

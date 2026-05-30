@@ -41,6 +41,12 @@ type FileEventData struct {
 	Timestamp time.Time   `json:"timestamp"`
 }
 
+type EditRequest struct {
+	MessageID uint   `json:"messageId"`
+	NewText   string `json:"newText"`
+	Username  string `json:"username"`
+}
+
 // Manager управляет WebSocket соединениями
 type Manager struct {
 	Clients   map[*Client]bool
@@ -62,6 +68,8 @@ type Manager struct {
 	PubSub      *redis.PubSub
 	ServerID    string
 	RedisMsgCh  chan []byte
+
+	EditMessage chan EditRequest
 }
 
 func NewManager(
@@ -84,6 +92,7 @@ func NewManager(
 		RedisClient: redisClient,
 		ServerID:    serverID,
 		RedisMsgCh:  make(chan []byte, 100),
+		EditMessage: make(chan EditRequest, 100),
 	}
 }
 
@@ -192,6 +201,28 @@ func (m *Manager) Run(ctx context.Context) {
 				m.publishFileEventToRedis(fileEvent)
 			}
 			m.broadcastFileEventToLocalClients(fileEvent)
+
+		case edit := <-m.EditMessage:
+			// Редактирование сообщения
+			err := m.MsgRepo.UpdateMessage(context.Background(), edit.MessageID, edit.NewText, edit.Username)
+			if err != nil {
+				log.Printf("❌ Ошибка редактирования сообщения: %v", err)
+				continue
+			}
+
+			if m.Cache != nil {
+				m.Cache.InvalidateMessages(context.Background())
+			}
+
+			// Рассылаем обновлённое сообщение всем клиентам
+			updatedMsg := models.Message{
+				ID:        edit.MessageID,
+				Username:  edit.Username,
+				Text:      edit.NewText,
+				Timestamp: time.Now(),
+				Edited:    true,
+			}
+			m.broadcastToLocalClients(updatedMsg)
 		}
 	}
 }
@@ -224,9 +255,11 @@ func (m *Manager) sendMessageHistory(client *Client) {
 		if err == nil {
 			for _, msg := range recent {
 				messages = append(messages, models.Message{
+					ID:        msg.ID,
 					Username:  msg.User.Username,
 					Text:      msg.Content,
 					Timestamp: msg.Timestamp,
+					Edited:    msg.Edited,
 				})
 			}
 			log.Printf("📜 Загружено %d сообщений из БД для %s", len(messages), client.Username)
@@ -286,13 +319,14 @@ func (m *Manager) saveMessageToDB(message models.Message) {
 		metrics.DatabaseDuration.WithLabelValues("save_message").Observe(time.Since(start).Seconds())
 	}()
 
-	err := m.MsgRepo.Create(ctx, &message)
+	id, err := m.MsgRepo.Create(ctx, &message)
 	if err != nil {
 		log.Printf("❌ Ошибка сохранения в БД: %v", err)
 		metrics.DatabaseOperations.WithLabelValues("create", "error").Inc()
 	} else {
 		metrics.DatabaseOperations.WithLabelValues("create", "success").Inc()
 	}
+	message.ID = id // присваиваем ID, чтобы отправить клиентам
 }
 
 // updateCache обновляет кэш

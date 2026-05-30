@@ -63,6 +63,28 @@ func (c *Client) ReadPump() {
 		// Логируем сырое сообщение для отладки
 		log.Printf("📨 [CLIENT %s] Сырое сообщение: %s", c.Username, string(rawMsg))
 
+		var base struct {
+			Type string          `json:"type"`
+			Data json.RawMessage `json:"data"`
+		}
+		if err := json.Unmarshal(rawMsg, &base); err == nil {
+			if base.Type == "edit" {
+				var editReq EditRequest
+				if err := json.Unmarshal(base.Data, &editReq); err == nil {
+					editReq.Username = c.Username
+					select {
+					case c.Manager.EditMessage <- editReq:
+						log.Printf("✏️ [CLIENT %s] Запрос на редактирование сообщения %d", c.Username, editReq.MessageID)
+					default:
+						log.Printf("⚠️ Канал EditMessage переполнен")
+					}
+				} else {
+					log.Printf("❌ [CLIENT %s] Ошибка парсинга данных редактирования: %v", c.Username, err)
+				}
+				continue // Не обрабатываем дальше, т.к. это не чат-сообщение
+			}
+		}
+
 		// Пробуем распарсить как разные форматы
 		var text string
 		var username string = c.Username // По умолчанию используем имя текущего клиента
