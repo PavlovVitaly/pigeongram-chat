@@ -183,7 +183,10 @@
                 } else if (msg.type === 'edit') {
                     const el = document.querySelector(`.message[data-message-id="${msg.data.id}"]`);
                     if (el) {
-                        el.querySelector('.message-text').textContent = msg.data.text;
+                        const textEl = el.querySelector('.message-text');
+                        if (textEl) {
+                            textEl.innerHTML = escapeHtml(msg.data.text);
+                        }
                         el.classList.add('edited');
                     }
                 }
@@ -260,18 +263,30 @@
         
             // Сохранение при Enter
             textarea.addEventListener('keydown', function(ev) {
-                if (ev.key === 'Enter' && !ev.shiftKey) {
-                    ev.preventDefault();
-                    const newText = textarea.value.trim();
-                    if (newText && newText !== currentText && socket.readyState === WebSocket.OPEN) {
-                        socket.send(JSON.stringify({
-                            type: 'edit',
-                            data: { messageId: Number(messageId), newText: newText }
-                        }));
+                if (ev.key === 'Enter') {
+                    if (ev.ctrlKey) {
+                        // Ctrl+Enter: вставляем перенос строки
+                        ev.preventDefault();
+                        const start = this.selectionStart;
+                        const end = this.selectionEnd;
+                        const value = this.value;
+                        this.value = value.substring(0, start) + '\n' + value.substring(end);
+                        this.selectionStart = this.selectionEnd = start + 1;
+                    } else if (!ev.shiftKey) {
+                        // Enter без модификаторов: сохраняем
+                        ev.preventDefault();
+                        const newText = this.value.trim();
+                        if (newText && newText !== currentText && socket.readyState === WebSocket.OPEN) {
+                            socket.send(JSON.stringify({
+                                type: 'edit',
+                                data: { messageId: Number(messageId), newText: newText }
+                            }));
+                        }
+                        // Возвращаем текстовый элемент
+                        this.replaceWith(textEl);
+                        if (newText) textEl.textContent = newText;
                     }
-                    // Возвращаем текстовый элемент
-                    textarea.replaceWith(textEl);
-                    if (newText) textEl.textContent = newText;
+                    // Shift+Enter обрабатывается браузером автоматически
                 }
             });
         
@@ -309,18 +324,15 @@
             }
 
             if (existingDiv) {
-                // Обновляем текст
                 const textEl = existingDiv.querySelector('.message-text');
                 if (textEl) {
-                    textEl.textContent = message.text;
+                    textEl.innerHTML = escapeHtml(message.text); // теперь \n → <br>
                 }
-                // Показываем, что отредактировано (если есть поле edited)
                 if (message.edited) {
                     existingDiv.classList.add('edited');
                 }
-                // Прокручиваем к обновлённому сообщению
                 existingDiv.scrollIntoView({ behavior: 'smooth' });
-                return; // Выходим, не создаём новое
+                return;
             }
 
             // Создаём новое сообщение
