@@ -185,7 +185,7 @@
                     if (el) {
                         const textEl = el.querySelector('.message-text');
                         if (textEl) {
-                            textEl.innerHTML = escapeHtml(msg.data.text);
+                            textEl.innerHTML = linkify(msg.data.text);
                         }
                         el.classList.add('edited');
                     }
@@ -252,7 +252,13 @@
             if (!messageId) return;
         
             const textEl = msgDiv.querySelector('.message-text');
-            const currentText = textEl.textContent;
+            const currentText = textEl.innerHTML
+                .replace(/<br\s*\/?>/gi, '\n')   // заменяем <br> на \n
+                .replace(/<[^>]*>/g, '')         // удаляем остальные теги (например, <a>)
+                .replace(/&amp;/g, '&')
+                .replace(/&lt;/g, '<')
+                .replace(/&gt;/g, '>')
+                .replace(/&quot;/g, '"');
         
             // Создаём поле ввода вместо текста
             const textarea = document.createElement('textarea');
@@ -326,7 +332,7 @@
             if (existingDiv) {
                 const textEl = existingDiv.querySelector('.message-text');
                 if (textEl) {
-                    textEl.innerHTML = escapeHtml(message.text); // теперь \n → <br>
+                    textEl.innerHTML = linkify(message.text);
                 }
                 if (message.edited) {
                     existingDiv.classList.add('edited');
@@ -367,7 +373,7 @@
                     <strong>${escapeHtml(message.username)}</strong>
                     <span class="time">${timeStr}</span>
                 </div>
-                <div class="message-text">${escapeHtml(message.text)}</div>
+                <div class="message-text">${linkify(message.text)}</div>
             `;
             
             container.appendChild(div);
@@ -387,6 +393,16 @@
             const div = document.createElement('div');
             div.textContent = text;
             return div.innerHTML.replace(/\n/g, '<br>');
+        }
+
+        function linkify(text) {
+            // Сначала экранируем HTML и заменяем \n на <br>
+            let html = escapeHtml(text);
+            // Регулярное выражение для поиска URL (начинающихся с http/https/ftp/file)
+            const urlPattern = /(\b(https?|ftp|file):\/\/[-A-Z0-9+&@#\/%?=~_|!:,.;]*[-A-Z0-9+&@#\/%=~_|])/ig;
+            // Заменяем URL на ссылки
+            html = html.replace(urlPattern, '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>');
+            return html;
         }
 
         function goToFileStorage() {
